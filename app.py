@@ -1,234 +1,255 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-import os
 
-# ==========================================
-# 1. 全局配置与常量
-# ==========================================
-st.set_page_config(page_title="Critical Mineral Flows", layout="wide")
+# 导入我们的模块
+from modules.config import get_color, hex_to_rgba
+from modules.data_loader import load_reference, load_raw_production, get_production_dicts, load_trade_flows
+from modules.sankey_algo import run_sankey_algorithm, calculate_explicit_positions, get_node_name
 
-# 特殊节点 ID 定义
-SPECIAL_IDS = {991, 992, 993, 994, 995, 996, 997, 998, 999}
-UARP_ID, NTRM_ID, NBCP_ID = 994, 997, 999
-
-# ID 颜色映射
-ID_COLORS = {
-    32: '#F6B50C', 36: '#DB05AA', 56: '#C8102E', 76: '#009639', 104: '#FFCD00',
-    124: '#01FFFF', 140: '#3E6E48', 152: '#008A03', 156: '#E81313', 170: '#FFCD00',
-    180: '#028573', 192: '#ADD8E6', 246: '#002F6C', 251: '#ED2939', 266: '#009E60',
-    268: '#DA291C', 288: '#EF3340', 300: '#001489', 356: '#FF9933', 360: '#53C55E',
-    384: '#FF8200', 392: '#FB9431', 398: '#00AFCA', 410: '#6D9EEB', 450: '#F2D2BD',
-    458: '#0032A0', 484: '#006341', 504: '#C1272D', 540: '#30D5C8', 579: '#BA0C2F',
-    598: '#FFCD00', 608: '#FFD580', 620: '#016201', 643: '#B7B7B7', 704: '#C8102E',
-    710: '#773F05', 716: '#056002', 724: '#AA151B', 804: '#0057B7', 826: '#012169',
-    842: '#635EFF', 894: '#FFC0CB', 986: '#4B535D',
-    991: '#CCCCCC', 992: '#CCCCCC', 993: '#CCCCCC', 994: '#CCCCCC',
-    995: '#CCCCCC', 996: '#CCCCCC', 997: '#CCCCCC', 998: '#CCCCCC', 999: '#CCCCCC'
-}
-
-
-def hex_to_rgba(hex_val, opacity=0.4):
-    hex_val = hex_val.lstrip('#')
-    rgb = tuple(int(hex_val[i:i + len(hex_val) // 3], 16) for i in range(0, len(hex_val), len(hex_val) // 3))
-    return f"rgba({rgb[0]}, {rgb[1]}, {rgb[2]}, {opacity})"
-
-
-def get_color(node_id):
-    try:
-        return ID_COLORS.get(int(float(node_id)), "#CCCCCC")
-    except:
-        return "#CCCCCC"
-
-
-# ==========================================
-# 2. 核心逻辑 (缓存以提高速度)
-# ==========================================
-@st.cache_data
-def get_sankey_data(year, metal, data_dir):
-    """读取数据并构建 Nodes 和 Links"""
-    file_path = os.path.join(data_dir, metal, f"{year}_matching.csv")
-
-    if not os.path.exists(file_path):
-        return None, None, None
-
-    df = pd.read_csv(file_path)
-    links = []
-    nodes = {}
-
-    # 阶段定义
-    S1, S2, S3, S4, S5 = "S1", "S2", "S3", "S4", "S5"
-    S_UARP = "S_UARP"
-    stage_flows = {S1: 0, S2: 0, S3: 0, S4: 0, S5: 0}
-
-    # 1. 1st Post-Trade
-    t1_df = df.iloc[:, [3, 4, 5, 6, 7]].dropna(subset=[df.columns[7]])
-    for _, row in t1_df.iterrows():
-        sid, sname, tid, tname, val = int(row[0]), row[1], int(row[2]), row[3], row[4]
-        if val <= 0 or (sid in SPECIAL_IDS and tid in SPECIAL_IDS): continue
-
-        if sid == UARP_ID:
-            src, tgt = (S_UARP, sid), (S3, tid)
-            stage_flows[S3] += val
-        elif tid == NTRM_ID:
-            src, tgt = (S2, sid), (S3, tid)
-            stage_flows[S2] += val
-        else:
-            src, tgt = (S1, sid), (S2, tid)
-            stage_flows[S1] += val
-
-        nodes[src], nodes[tgt] = sname, tname
-        links.append({'source': src, 'target': tgt, 'value': val, 'color_id': sid})
-
-    # 2. Refining Production
-    s2_df = df.iloc[:, [8, 9, 10]].dropna()
-    for _, row in s2_df.iterrows():
-        nid, name, val = int(row[0]), row[1], row[2]
-        if val > 0:
-            src, tgt = (S2, nid), (S3, nid)
-            nodes[src], nodes[tgt] = name, name
-            links.append({'source': src, 'target': tgt, 'value': val, 'color_id': nid})
-            stage_flows[S2] += val
-
-            # 3. 2nd Post-Trade
-    t2_df = df.iloc[:, [11, 12, 13, 14, 15]].dropna(subset=[df.columns[15]])
-    for _, row in t2_df.iterrows():
-        sid, sname, tid, tname, val = int(row[0]), row[1], int(row[2]), row[3], row[4]
-        if val <= 0 or (sid in SPECIAL_IDS and tid in SPECIAL_IDS): continue
-
-        if tid == NBCP_ID:
-            src, tgt = (S4, sid), (S5, tid)
-            stage_flows[S4] += val
-        else:
-            src, tgt = (S3, sid), (S4, tid)
-            stage_flows[S3] += val
-
-        nodes[src], nodes[tgt] = sname, tname
-        links.append({'source': src, 'target': tgt, 'value': val, 'color_id': sid})
-
-    # 4. Manufacturing Production
-    s3_df = df.iloc[:, [16, 17, 18]].dropna()
-    for _, row in s3_df.iterrows():
-        nid, name, val = int(row[0]), row[1], row[2]
-        if val > 0:
-            src, tgt = (S4, nid), (S5, nid)
-            nodes[src], nodes[tgt] = name, name
-            links.append({'source': src, 'target': tgt, 'value': val, 'color_id': nid})
-            stage_flows[S4] += val
-
-    return nodes, links, stage_flows
-
-
-# ==========================================
-# 3. 网页界面与交互
-# ==========================================
+st.set_page_config(page_title="Sankey Flow Generator", layout="wide")
 st.title("🔋 Critical Mineral Flows Visualizer")
-st.markdown("Select a metal and year to visualize the global supply chain flows.")
 
-# --- 侧边栏：控制面板 ---
+# ==================== 侧边栏 ====================
 with st.sidebar:
-    st.header("Settings")
+    st.header("1. General Settings")
 
-    # 选择金属
-    selected_metal = st.selectbox("Select Metal", ["Li", "Co", "Ni", "Mn"], index=0)
+    # 【修改点 1】修改默认值为 Li, 2020
+    # index=0 对应列表第一个元素 "Li"
+    sel_metal = st.selectbox("Metal", ["Li", "Co", "Ni", "Mn"], index=0)
 
-    # 选择年份
-    selected_year = st.selectbox("Select Year", [2020, 2021, 2022, 2023, 2024], index=4)
+    # index=0 对应列表第一个元素 2020
+    sel_year = st.selectbox("Year", [2020, 2021, 2022, 2023, 2024], index=0)
+
+    # 【修改点 2】修改默认参考数量为 20000
+    ref_qty = st.number_input("Ref Qty (t)", value=20000, step=1000)
+
+    # ... (Header 1. General Settings 部分保持不变) ...
+
+    st.divider()
+    st.header("2. Layout Config")
+
+    # -------------------------------------------------------
+    # 【修改点 1】Layout Settings
+    # 风格改为：Caption (指引) + Expander (操作区)
+    # -------------------------------------------------------
+    st.caption("Customize intermediate stages")  # 简短指引
+    with st.expander("Open Configuration", expanded=False):
+        # 原有的配置逻辑
+        special_stages = {}
+        alignments = {}
+
+
+        def config_node(node_name, default_stage, inter_stage):
+            opt = st.selectbox(f"{node_name}", [f"{default_stage}", f"{inter_stage}"])
+            target = default_stage if default_stage in opt else inter_stage
+            special_stages[node_name] = target
+
+
+        st.markdown("**Mining Stage**")
+        config_node("TFCM", "S1", "S1.5")
+        config_node("TTCR", "S2", "S1.5")
+        config_node("URMS", "S1", "S1.5")
+        alignments["S1.5"] = st.radio("Align S1.5", ["Top", "Bottom"], index=0, horizontal=True)
+
+        st.markdown("---")
+        st.markdown("**Refining Stage**")
+        config_node("UARP", "S2", "S2.5")
+        config_node("NTRM", "S3", "S2.5")
+        alignments["S2.5"] = st.radio("Align S2.5", ["Top", "Bottom"], index=0, horizontal=True)
+
+        st.markdown("---")
+        st.markdown("**Manuf. Input**")
+        config_node("TFCR", "S3", "S3.5")
+        config_node("MRMT", "S3", "S3.5")
+        config_node("NCPC", "S4", "S3.5")
+        alignments["S3.5"] = st.radio("Align S3.5", ["Top", "Bottom"], index=0, horizontal=True)
+
+        st.markdown("---")
+        st.markdown("**Manuf. Output**")
+        config_node("NBCP", "S5", "S4.5")
+        alignments["S4.5"] = st.radio("Align S4.5", ["Top", "Bottom"], index=0, horizontal=True)
+
+    st.divider()
+    st.header("3. Reference & Helpers")
+
+    # -------------------------------------------------------
+    # 【修改点 2】Search Country (保持原样，作为视觉参考)
+    # -------------------------------------------------------
+    st.caption("Find country ID by name")  # 简短指引
+    id_map, ref_df = load_reference()
+    search = st.text_input("Search Country", label_visibility="collapsed", placeholder="Type country name...")
+    if search:
+        res = ref_df[ref_df['text'].str.contains(search, case=False, na=False)]
+        st.dataframe(res, hide_index=True)
+
+    # -------------------------------------------------------
+    # 【修改点 3】Acronym Legend
+    # 风格改为：Caption (指引) + Expander (查看区)
+    # -------------------------------------------------------
+    st.caption("View special acronym definitions")  # 简短指引
+    with st.expander("Show Legend"):
+        st.markdown("""
+            <small style='line-height: 1.4;'>
+            <b>NBCP</b>: Non-Battery Cathode Products<br>
+            <b>NCPC</b>: Trade to countries w/o production<br>
+            <b>NTRM</b>: Unaccounted Raw Materials<br>
+            <b>MRMT</b>: Missing Refined Trade<br>
+            <b>URMS</b>: Unknown Raw Material Source<br>
+            <b>UARP</b>: Unaccounted Refining Prod.<br>
+            <b>TTCR</b>: Trade to non-refining countries<br>
+            <b>TFCR</b>: Trade from non-refining countries<br>
+            <b>TFCM</b>: Trade from non-mining countries
+            </small>
+            """, unsafe_allow_html=True)
+
+# ==================== 数据加载 ====================
+m_raw, r_raw, c_raw = load_raw_production()
+s1_d, s2_d, s3_d = get_production_dicts(sel_metal, sel_year, m_raw, r_raw, c_raw)
+
+with st.spinner("Loading trade data..."):
+    t1_df = load_trade_flows("1st_post_trade", sel_metal, sel_year)
+    t2_df = load_trade_flows("2nd_post_trade", sel_metal, sel_year)
+
+# 预运行一次以获取节点列表
+init_nodes, _, _ = run_sankey_algorithm(s1_d, s2_d, s3_d, t1_df, t2_df, id_map, special_stages)
+stage_node_names = {}
+for (stage, _), label in init_nodes.items():
+    if stage not in stage_node_names: stage_node_names[stage] = []
+    if label not in stage_node_names[stage] and label != "":
+        stage_node_names[stage].append(label)
+
+# ==================== 主界面 ====================
+tab1, tab2 = st.tabs(["⚙️ Editor", "📊 Diagram"])
+
+with tab1:
+    # 定义编辑器组件函数
+    def editor_widget(prod_dict, key):
+        # 将字典转换为 DataFrame 用于编辑
+        data = [{"ID": k, "Name": get_node_name(k, id_map), "Quantity": v} for k, v in prod_dict.items()]
+        df = st.data_editor(pd.DataFrame(data), key=key, num_rows="dynamic", hide_index=True, use_container_width=True)
+        # 将编辑后的 DataFrame 转回字典
+        return dict(zip(df["ID"], df["Quantity"]))
+
+
+    # 初始化排序字典
+    user_sort = {}
+
+
+    # 辅助函数：渲染排序组件
+    def render_sort_widgets(stages_to_show):
+        # 使用列布局让排序框横向排列，节省垂直空间
+        cols = st.columns(len(stages_to_show))
+        for idx, s in enumerate(stages_to_show):
+            with cols[idx]:
+                if s in stage_node_names and stage_node_names[s]:
+                    user_sort[s] = st.multiselect(
+                        f"Order: {s}",
+                        stage_node_names[s],
+                        default=stage_node_names[s],
+                        label_visibility="collapsed"
+                    )
+
+
+    # ==========================================
+    # 第一部分：Mining (S1)
+    # ==========================================
+    st.markdown("### S1: Mining Production")
+    s1_final = editor_widget(s1_d, "s1")
+
+    # 下方放置对应的排序 (S1 和 S1.5)
+    with st.expander("Adjust Order (S1)", expanded=True):
+        render_sort_widgets(["S1", "S1.5"])
+    with st.expander("Adjust Order (S2: 1st post-trade)", expanded=True):
+        render_sort_widgets(["S2", "S2.5"])
 
     st.divider()
 
-    # 缩放控制 (参考块大小)
-    st.subheader("Scale Reference")
-    ref_qty = st.number_input("Reference Quantity (tons)", value=10000, step=1000)
-    # 不再让用户输入像素，而是根据屏幕自动调整，或者这里仅仅是作为数据计算
-    # 在网页上，固定像素高度可能不太好适配，但我们可以保留原始逻辑
+    # ==========================================
+    # 第二部分：Refining (S2)
+    # ==========================================
+    st.markdown("### S3: Refining Production")
+    s2_final = editor_widget(s2_d, "s3")
 
-    # 路径设置 (适配当前目录)
-    # 假设 data 文件夹在 app.py 同级目录
-    DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+    with st.expander("Adjust Order (S3)", expanded=True):
+        render_sort_widgets(["S3", "S3.5"])
+    with st.expander("Adjust Order (S4: 2nd post-trade)", expanded=True):
+        render_sort_widgets(["S4", "S4.5"])
 
-# --- 数据处理 ---
-nodes, links, stage_flows = get_sankey_data(selected_year, selected_metal, DATA_DIR)
+    st.divider()
 
-if nodes is None:
-    st.error(f"Data not found for {selected_metal} in {selected_year}. Please check the 'data' folder structure.")
-else:
-    # --- 添加参考流逻辑 ---
-    if ref_qty > 0:
-        ref_label = f"{ref_qty:,.0f} t"
-        k1, k2, k3, k4, k5 = ("REF_S1", 0), ("REF_S2", 0), ("REF_S3", 0), ("REF_S4", 0), ("REF_S5", 0)
+    # ==========================================
+    # 第三部分：Manufacturing (S3)
+    # ==========================================
+    st.markdown("### S5: Cathode & Electrolyte Manufacturing")
+    s3_final = editor_widget(s3_d, "s5")
+    with st.expander("Adjust Order (S5)", expanded=True):
+        render_sort_widgets(["S5"])
 
-        # 仅最后一个节点有标签
-        nodes[k1], nodes[k2], nodes[k3], nodes[k4] = "", "", "", ""
-        nodes[k5] = ref_label
+with tab2:
+    if st.button("Generate Sankey"):
+        # 调用算法模块
+        nodes, links, stage_flows = run_sankey_algorithm(s1_final, s2_final, s3_final, t1_df, t2_df, id_map,
+                                                         special_stages)
 
-        transparent = "rgba(0,0,0,0)"
-        for s, t in [(k1, k2), (k2, k3), (k3, k4), (k4, k5)]:
-            links.append({'source': s, 'target': t, 'value': ref_qty, 'color_code': transparent})
+        # 添加参考流
+        if ref_qty > 0:
+            rk1, rk2, rk3, rk4, rk5 = ("REF_S1", 0), ("REF_S2", 0), ("REF_S3", 0), ("REF_S4", 0), ("REF_S5", 0)
+            nodes[rk1], nodes[rk2], nodes[rk3], nodes[rk4] = "", "", "", ""
+            nodes[rk5] = f"{ref_qty:,.0f} t"
+            trans = "rgba(0,0,0,0)"
+            for s, t in [(rk1, rk2), (rk2, rk3), (rk3, rk4), (rk4, rk5)]:
+                links.append({'source': s, 'target': t, 'value': ref_qty, 'color_code': trans})
 
-    # --- 绘图准备 ---
-    sorted_node_keys = sorted(nodes.keys(), key=lambda x: (x[0], str(x[1])))
-    node_map = {key: i for i, key in enumerate(sorted_node_keys)}
+        # 聚合 links
+        agg_links = {}
+        for l in links:
+            k = (l['source'], l['target'])
+            if k not in agg_links: agg_links[k] = {'value': 0, 'c_code': l.get('color_code'), 'c_id': l.get('color_id')}
+            agg_links[k]['value'] += l['value']
+            # 保留颜色属性 (优先特殊颜色)
+            if l.get('color_code'): agg_links[k]['c_code'] = l['color_code']
+            if l.get('color_id') and not agg_links[k]['c_id']: agg_links[k]['c_id'] = l['color_id']
 
-    node_labels = [nodes[k] for k in sorted_node_keys]
+        final_links = []
+        for (s, t), d in agg_links.items():
+            final_links.append(
+                {'source': s, 'target': t, 'value': d['value'], 'color_code': d['c_code'], 'color_id': d['c_id']})
 
-    node_colors = []
-    for k in sorted_node_keys:
-        if isinstance(k[0], str) and k[0].startswith("REF_"):
-            node_colors.append("#888888" if k[0] == "REF_S5" else "rgba(0,0,0,0)")
-        else:
-            node_colors.append(get_color(k[1]))
+        # 计算坐标
+        sorted_keys, nx, ny = calculate_explicit_positions(nodes, final_links, user_sort, stage_flows, alignments,
+                                                           ref_qty)
 
-    link_sources = [node_map[l['source']] for l in links]
-    link_targets = [node_map[l['target']] for l in links]
-    link_values = [l['value'] for l in links]
+        # 绘图
+        node_map = {k: i for i, k in enumerate(sorted_keys)}
+        node_lbl = [nodes[k] for k in sorted_keys]
+        node_clr = ["#888888" if str(k[0]).startswith("REF_S5") else (
+            "rgba(0,0,0,0)" if str(k[0]).startswith("REF_") else get_color(k[1])) for k in sorted_keys]
 
-    link_colors = []
-    for l in links:
-        if 'color_code' in l:
-            link_colors.append(l['color_code'])
-        else:
-            link_colors.append(hex_to_rgba(get_color(l['color_id']), 0.4))
+        lnk_src = [node_map[l['source']] for l in final_links]
+        lnk_tgt = [node_map[l['target']] for l in final_links]
+        lnk_val = [l['value'] for l in final_links]
 
-    # --- 计算动态高度 ---
-    # 网页端可以设置得稍微大一点
-    # 逻辑：以 10000 吨 = 50px 为基准 (用户不可见，作为内部比例)
-    base_ref_pixels = 50
-    max_flow = max(stage_flows.values()) if stage_flows else 0
-    if max_flow > 0:
-        pixels_per_unit = base_ref_pixels / ref_qty
-        calc_height = max_flow * pixels_per_unit + 250
-        chart_height = max(600, int(calc_height))
-    else:
-        chart_height = 600
+        # 处理连线颜色
+        lnk_clr = []
+        for l in final_links:
+            if l.get('color_code'):
+                lnk_clr.append(l['color_code'])
+            else:
+                cid = l.get('color_id')
+                # 修复潜在的 None 问题
+                if cid is None: cid = 0
+                lnk_clr.append(hex_to_rgba(get_color(cid), 0.4))
 
-    # --- 生成图表 ---
-    fig = go.Figure(data=[go.Sankey(
-        node=dict(
-            pad=15, thickness=20,
-            line=dict(color="black", width=0.5),
-            label=node_labels,
-            color=node_colors,
-            # 网页版建议不强制黑色字体，除非你把背景设为纯白
-            # 这里留空，自适应 Streamlit 的明/暗模式
-        ),
-        link=dict(
-            source=link_sources, target=link_targets,
-            value=link_values, color=link_colors
-        )
-    )])
+        fig = go.Figure(go.Sankey(
+            arrangement="fixed",
+            node=dict(pad=15, thickness=20, line=dict(color="black", width=0.5), label=node_lbl, color=node_clr, x=nx,
+                      y=ny),
+            link=dict(source=lnk_src, target=lnk_tgt, value=lnk_val, color=lnk_clr)
+        ))
 
-    fig.update_layout(
-        title_text=f"{selected_metal} Flows - {selected_year}",
-        font_size=12,
-        height=chart_height,
-        margin=dict(l=20, r=20, t=40, b=20)
-    )
-
-    # --- 显示 ---
-    st.plotly_chart(fig, use_container_width=True)
-
-    # 额外信息
-    with st.expander("Show Statistics"):
-        st.write(f"Max Stage Flow: {max_flow:,.0f} t")
-        st.write(stage_flows)
+        # 计算高度
+        max_f = max(stage_flows.values()) if stage_flows else 0
+        h = (max_f / ref_qty * 50 + 200) if (ref_qty > 0 and max_f > 0) else 800
+        fig.update_layout(height=max(600, int(h)), title_text=f"{sel_metal} {sel_year}")
+        st.plotly_chart(fig, use_container_width=True)
