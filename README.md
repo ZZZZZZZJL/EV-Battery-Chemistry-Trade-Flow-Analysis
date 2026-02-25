@@ -1,6 +1,6 @@
 # EV Battery Chemistry Trade Flow Analysis 🔋
 
-An interactive web application built with Streamlit and Plotly to visualize the global supply chain flows of critical minerals (Lithium, Cobalt, Nickel, and Manganese) from mining to cathode manufacturing.
+An interactive web application built with Streamlit and Plotly to visualize the global supply chain flows of critical minerals (Lithium, Cobalt, Nickel, and Manganese) from mining to cathode manufacturing. Try to do analysis through the online version and remember to upload the production data step by step: https://ev-battery-chemistry-trade-flow-analysis-knldvtkrg6xpfeea7fqzq.streamlit.app/
 
 ## ✨ Features
 
