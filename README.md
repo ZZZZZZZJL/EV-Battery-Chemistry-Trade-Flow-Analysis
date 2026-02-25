@@ -4,7 +4,7 @@ An interactive web application built with Streamlit and Plotly to visualize the 
 
 ## ✨ Features
 
-- **Interactive Sankey Diagrams**: Visualizes complex trade flows across three main stages: Mining (S1), Refining (S2), and Cathode & Electrolyte Manufacturing (S3-S5).
+- **Interactive Sankey Diagrams**: Visualizes complex trade flows across three main stages: Mining (S1), Refining (S3), and Cathode & Electrolyte Manufacturing (S5).
 - **Mass Balance Tracking**: Features an optional "Split Gap" calculation to visually separate domestic production from inventory drawdowns or re-exports.
 - **Chemistry Breakdown**: Toggle the final output stage between a country-level breakdown and a battery chemistry-level breakdown (NCA, NCM, LFP).
 - **Customizable Layout**: Dynamically reorder nodes based on predefined regional groupings, absolute quantities, or manual drag-and-drop. Move special condition nodes to intermediate columns.
@@ -44,9 +44,9 @@ This tab gives you full control over the underlying data and the vertical orderi
 ### ⚠️ Mandatory Data Upload
 **To generate the Sankey diagram, you must upload properly formatted production data files.** Please refer to the empty `.xlsx` template files located in the `data/production/` folder. Fill in your data according to the template formats and upload them via the respective upload buttons in the Editor UI.
 
-### 📊 Data Editor (S1, S2, S3)
+### 📊 Data Editor (S1, S3, S5)
 Each major production stage has an interactive data grid:
-- **Custom Data Upload**: Next to each stage header (S1, S2, S3), use the upload button to drop your formatted `.xlsx` file. This is required to initialize the data for that session.
+- **Custom Data Upload**: Next to each stage header (S1, S3, S5), use the upload button to drop your formatted `.xlsx` file. This is required to initialize the data for that session.
 - **Inline Editing**: Once the data is loaded, click any cell in the "Quantity" column to manually adjust the production volume for a specific country. The Sankey diagram will dynamically recalculate downstream flows based on your changes.
 - **Dynamic Chemistry Split**: If *S5 Output Mode* is set to "By Chemistry Type", the S3 (Manufacturing) table automatically expands to show dedicated input columns for NCM, NCA, and LFP for each country.
 
