@@ -3,6 +3,11 @@ from .config import SPECIAL_NODES_MAP, get_color, hex_to_rgba
 
 # 辅助函数：获取节点名称
 def get_node_name(name_or_id, id_to_name_map):
+    # 【新增】识别 _gap 后缀，加上文本注释
+    if isinstance(name_or_id, str) and str(name_or_id).endswith("_gap"):
+        base_id = int(float(str(name_or_id).split("_")[0]))
+        return f"{get_node_name(base_id, id_to_name_map)} (Gap)"
+
     if name_or_id in SPECIAL_NODES_MAP: return name_or_id
     try:
         cid = int(float(name_or_id))
@@ -35,7 +40,7 @@ def balance(prod_dict, trade_df):
     return flow_dict, miss_prod
 
 
-def run_sankey_algorithm(s1_prod, s2_prod, s3_prod, t1_df, t2_df, id_to_name, special_stages):
+def run_sankey_algorithm(s1_prod, s2_prod, s3_prod, t1_df, t2_df, id_to_name, special_stages, s3_breakdown, s5_mode, calc_mass_balance):
     """
     运行桑基图核心逻辑，生成 Nodes 和 Links
     """
@@ -81,14 +86,39 @@ def run_sankey_algorithm(s1_prod, s2_prod, s3_prod, t1_df, t2_df, id_to_name, sp
     # --- PART 1: Mining Trade ---
     for exporter, trade in mrbal.items():
         is_miner = (exporter in s1_prod) or (exporter == SPECIAL_NODES_MAP["URMS"])
+
+        # 【新增】计算 Gap 的拆分比例
+        gap_ratio = 0.0
+        actual_ratio = 1.0
+        # 如果开启了 Mass Balance，且该出口国存在亏空 (mmiss 记录了出口>产量的差值)
+        if calc_mass_balance and exporter in mmiss and mmiss[exporter] > 0:
+            total_export = sum(v for v in trade.values() if v > 1e-9)
+            if total_export > 0:
+                gap_ratio = mmiss[exporter] / total_export
+                actual_ratio = 1.0 - gap_ratio
+
         for importer, value in trade.items():
             if value <= 1e-9: continue
+
             if is_miner:
                 if importer in s2_prod:
-                    add_link(S1, exporter, S2, importer, value, exporter)
+                    tgt_id = importer
                 else:
-                    ttcr_id = SPECIAL_NODES_MAP["TTCR"]
-                    add_link(S1, exporter, S2, ttcr_id, value, exporter)
+                    tgt_id = SPECIAL_NODES_MAP["TTCR"]
+
+                # 【新增】如果开启了拆分且存在亏空，将一条线拆成两条
+                if calc_mass_balance and gap_ratio > 0:
+                    val_actual = value * actual_ratio
+                    val_gap = value * gap_ratio
+
+                    if val_actual > 0:
+                        add_link(S1, exporter, S2, tgt_id, val_actual, exporter)
+                    if val_gap > 0:
+                        gap_id = f"{exporter}_gap"  # 生成虚拟 ID
+                        add_link(S1, gap_id, S2, tgt_id, val_gap, gap_id)
+                else:
+                    # 默认情况（不拆分）
+                    add_link(S1, exporter, S2, tgt_id, value, exporter)
             else:
                 tfcm_id = SPECIAL_NODES_MAP["TFCM"]
                 if importer in s2_prod:
@@ -156,8 +186,23 @@ def run_sankey_algorithm(s1_prod, s2_prod, s3_prod, t1_df, t2_df, id_to_name, sp
             add_link(S3, mrmt_id, S4, country, -diff, mrmt_id)
 
     # --- PART 8: Manufacturing Prod ---
+    # --- PART 8: Manufacturing Prod ---
     for country, prod in s3_prod.items():
         if prod > 0:
+            if s5_mode == "By Chemistry Type" and country in s3_breakdown:
+                # 为了兼容在网页 Editor 中手动修改过总产量的情况，根据原始比例分配
+                original_total = sum(s3_breakdown[country].values())
+                if original_total > 0:
+                    ratio = prod / original_total
+                    for chem_type, chem_qty in s3_breakdown[country].items():
+                        scaled_qty = chem_qty * ratio
+                        if scaled_qty > 0:
+                            chem_id = SPECIAL_NODES_MAP[chem_type]
+                            # 起点为 S4 国家，终点为 S5 种类节点，连线颜色跟随起点国家
+                            add_link(S4, country, S5, chem_id, scaled_qty, country)
+                    continue  # 种类连线生成完毕，跳过默认的国家连线
+
+            # 默认：按国家输出 (或者遇到了没有拆分数据的手动新增国家)
             add_link(S4, country, S5, country, prod, country)
 
     return nodes, links, stage_flows
