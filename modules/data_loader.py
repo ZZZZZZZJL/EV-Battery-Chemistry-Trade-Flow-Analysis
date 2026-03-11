@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import os
 import glob
-from .config import REF_FILE, PROD_FILES, TRADE_DIR
+from .config import REF_FILE, TRADE_DIR, DATA_DIR
 
 
 @st.cache_data
@@ -14,11 +14,46 @@ def load_reference():
 
 
 @st.cache_data
-def load_raw_production():
-    """读取所有生产数据 Excel"""
-    m = pd.read_excel(PROD_FILES["Mining"])
-    r = pd.read_excel(PROD_FILES["Refining"])
-    c = pd.read_excel(PROD_FILES["Cathode"])
+def load_raw_production(s1_source="country", s3_source="country", s5_source="country"):
+    """
+    按阶段分别读取 production 数据：
+    - S1 (Mining)
+    - S3 (Refining)
+    - S5 (Cathode Manufacturing)
+
+    参数
+    ----
+    s1_source / s3_source / s5_source : str
+        "country" 或 "ownership"
+    """
+
+    def normalize_source(x):
+        x = str(x).strip().lower()
+        if x not in ["country", "ownership"]:
+            raise ValueError("production source must be 'country' or 'ownership'")
+        return x
+
+    s1_source = normalize_source(s1_source)
+    s3_source = normalize_source(s3_source)
+    s5_source = normalize_source(s5_source)
+
+    production_root = os.path.join(DATA_DIR, "production")
+
+    mining_path = os.path.join(production_root, s1_source, "Mining_Production.xlsx")
+    refining_path = os.path.join(production_root, s3_source, "Refining_Production.xlsx")
+    cathode_path = os.path.join(production_root, s5_source, "Cathode_Production_converted.xlsx")
+
+    if not os.path.exists(mining_path):
+        raise FileNotFoundError(f"Mining production file not found: {mining_path}")
+    if not os.path.exists(refining_path):
+        raise FileNotFoundError(f"Refining production file not found: {refining_path}")
+    if not os.path.exists(cathode_path):
+        raise FileNotFoundError(f"Cathode production file not found: {cathode_path}")
+
+    m = pd.read_excel(mining_path)
+    r = pd.read_excel(refining_path)
+    c = pd.read_excel(cathode_path)
+
     return m, r, c
 
 
@@ -113,43 +148,94 @@ def get_production_dicts(metal, year, m_prod, r_prod, c_prod):
 
 
 @st.cache_data
-def load_trade_flows(folder_name, metal, year):
+def load_trade_flows(folder_name, metal, year, trade_mode):
     """
-    针对 CSV 优化的读取函数
+    读取贸易流数据，并统一输出为标准方向:
+    exporter -> importer
+
+    参数
+    ----
+    folder_name : str
+        "1st_post_trade" 或 "2nd_post_trade"
+    metal : str
+        "Li" / "Co" / "Ni" / "Mn"
+    year : int
+        目标年份
+    trade_mode : str
+        "import" 或 "export"
+
+    数据语义
+    ----
+    1) import 文件:
+       - 文件 id = 报告的进口国（买进）
+       - Partner ID = 出口方（卖出）
+       => exporter = Partner ID
+          importer = 文件 id
+
+    2) export 文件:
+       - 文件 id = 报告的出口国（卖出）
+       - Partner ID = 进口方（买进）
+       => exporter = 文件 id
+          importer = Partner ID
     """
-    path = os.path.join(TRADE_DIR, folder_name)
+    trade_mode = str(trade_mode).strip().lower()
+    if trade_mode not in ["import", "export"]:
+        raise ValueError("trade_mode must be 'import' or 'export'")
+
+    path = os.path.join(TRADE_DIR, trade_mode, folder_name)
     flows = []
-    if not os.path.exists(path): return pd.DataFrame()
+
+    if not os.path.exists(path):
+        return pd.DataFrame(columns=["exporter", "importer", "value"])
 
     target_folders = [f for f in os.listdir(path) if f.startswith(metal)]
+
     for sub in target_folders:
         files = glob.glob(os.path.join(path, sub, "*_combined.csv"))
+
         for f in files:
             try:
-                # 简单文件名检查，避免无效 IO
                 filename = os.path.basename(f)
-                importer_id = int(filename.split('_')[0])
-                if importer_id == 0: continue
+                reporter_id = int(filename.split("_")[0])
 
-                # 【核心优化】只读取需要的列，显著提升 CSV 读取速度
+                if reporter_id == 0:
+                    continue
+
                 df = pd.read_csv(
                     f,
-                    usecols=['Year', 'Partner ID', 'Quantity'],
-                    engine='c'  # 强制使用 C 引擎
+                    usecols=["Year", "Partner ID", "Quantity"],
+                    engine="c"
                 )
 
-                # 过滤年份
-                df_y = df[df['Year'] == year]
+                df_y = df[df["Year"] == year]
 
-                # 转换为 List of Dicts (比 DataFrame append 快)
                 for _, r in df_y.iterrows():
                     try:
-                        exporter_id = int(r['Partner ID'])
-                        if exporter_id == 0: continue
-                        flows.append({'exporter': exporter_id, 'importer': importer_id, 'value': r['Quantity']})
+                        partner_id = int(r["Partner ID"])
+                        qty = float(r["Quantity"])
+
+                        if partner_id == 0 or qty <= 0:
+                            continue
+
+                        if trade_mode == "import":
+                            # 文件国 = importer, Partner = exporter
+                            exporter_id = partner_id
+                            importer_id = reporter_id
+                        else:  # trade_mode == "export"
+                            # 文件国 = exporter, Partner = importer
+                            exporter_id = reporter_id
+                            importer_id = partner_id
+
+                        flows.append({
+                            "exporter": exporter_id,
+                            "importer": importer_id,
+                            "value": qty
+                        })
+
                     except:
                         continue
+
             except:
                 continue
 
-    return pd.DataFrame(flows) if flows else pd.DataFrame(columns=['exporter', 'importer', 'value'])
+    return pd.DataFrame(flows) if flows else pd.DataFrame(columns=["exporter", "importer", "value"])

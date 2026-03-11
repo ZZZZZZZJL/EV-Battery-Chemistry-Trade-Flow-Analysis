@@ -1,0 +1,238 @@
+﻿Year,Partner ID,Partner Name,Quantity,Unit
+2020,0,World,999.9595385,t
+2020,579,Norway,0.0825,t
+2020,604,Peru,0.015,t
+2020,643,Russian Federation,6.943,t
+2020,682,Saudi Arabia,0.016,t
+2020,688,Serbia,0.201,t
+2020,699,India,3.0005,t
+2020,702,Singapore,0.0485,t
+2020,710,South Africa,0.6025,t
+2020,757,Switzerland,16.61,t
+2020,764,Thailand,10.0,t
+2020,784,United Arab Emirates,1.535,t
+2020,788,Tunisia,0.5165,t
+2020,792,Türkiye,39.824,t
+2020,795,Turkmenistan,0.25,t
+2020,804,Ukraine,0.325,t
+2020,807,North Macedonia,0.0345,t
+2020,818,Egypt,0.327,t
+2020,826,United Kingdom,372.5935,t
+2020,842,USA,273.7731445,t
+2020,858,Uruguay,0.0075,t
+2020,860,Uzbekistan,0.05,t
+2020,554,New Zealand,0.0080525,t
+2020,490,"Other Asia, nes",2.208,t
+2020,760,Syria,0.06,t
+2020,458,Malaysia,0.036,t
+2020,484,Mexico,3.733,t
+2020,8,Albania,0.023,t
+2020,12,Algeria,1.0,t
+2020,31,Azerbaijan,0.2285,t
+2020,36,Australia,8.0915,t
+2020,68,Bolivia (Plurinational State of),0.0125,t
+2020,70,Bosnia Herzegovina,0.21,t
+2020,124,Canada,0.224,t
+2020,152,Chile,0.002,t
+2020,156,China,53.26,t
+2020,170,Colombia,0.077,t
+2020,76,Brazil,13.967,t
+2020,422,Lebanon,0.059,t
+2020,320,Guatemala,0.004,t
+2020,344,"China, Hong Kong SAR",2.6005,t
+2020,360,Indonesia,0.00184149999999995,t
+2020,364,Iran,0.05,t
+2020,376,Israel,1.3245,t
+2020,392,Japan,125.1535,t
+2020,400,Jordan,0.0105,t
+2020,410,Rep. of Korea,60.8545,t
+2020,275,State of Palestine,0.0055,t
+2021,704,Viet Nam,0.648,t
+2021,702,Singapore,0.041,t
+2021,699,India,0.071,t
+2021,688,Serbia,0.541,t
+2021,579,Norway,0.0005,t
+2021,643,Russian Federation,4.4625,t
+2021,604,Peru,0.0105,t
+2021,586,Pakistan,1.5285,t
+2021,710,South Africa,0.2635,t
+2021,682,Saudi Arabia,0.1402785,t
+2021,757,Switzerland,39.267,t
+2021,899,"Areas, nes",0.0085,t
+2021,788,Tunisia,0.4225,t
+2021,792,Türkiye,32.8885,t
+2021,804,Ukraine,0.103348,t
+2021,807,North Macedonia,0.0065,t
+2021,818,Egypt,0.5,t
+2021,826,United Kingdom,518.324,t
+2021,842,USA,450.1550805,t
+2021,858,Uruguay,0.012,t
+2021,860,Uzbekistan,0.7,t
+2021,504,Morocco,0.109,t
+2021,764,Thailand,10.0,t
+2021,490,"Other Asia, nes",2.927,t
+2021,156,China,68.3515,t
+2021,458,Malaysia,0.003,t
+2021,0,World,1411.9692525,t
+2021,8,Albania,0.0135,t
+2021,484,Mexico,6.773,t
+2021,31,Azerbaijan,0.108,t
+2021,36,Australia,35.3785,t
+2021,51,Armenia,0.0155,t
+2021,70,Bosnia Herzegovina,0.6578835,t
+2021,76,Brazil,21.6385,t
+2021,124,Canada,11.97,t
+2021,152,Chile,0.008,t
+2021,170,Colombia,0.0745,t
+2021,12,Algeria,0.002162,t
+2021,410,Rep. of Korea,97.609,t
+2021,222,El Salvador,0.026,t
+2021,268,Georgia,0.0095,t
+2021,320,Guatemala,0.012,t
+2021,344,"China, Hong Kong SAR",2.05,t
+2021,360,Indonesia,0.335,t
+2021,376,Israel,0.063,t
+2021,392,Japan,103.636,t
+2021,400,Jordan,0.016,t
+2021,422,Lebanon,0.0285,t
+2021,218,Ecuador,0.06,t
+2022,702,Singapore,0.1965,t
+2022,699,India,15.6285,t
+2022,688,Serbia,0.196,t
+2022,579,Norway,0.002,t
+2022,608,Philippines,0.001,t
+2022,604,Peru,0.0195,t
+2022,704,Viet Nam,1.4956955,t
+2022,643,Russian Federation,1.1291,t
+2022,710,South Africa,0.0485,t
+2022,804,Ukraine,0.0015,t
+2022,764,Thailand,5.7,t
+2022,784,United Arab Emirates,0.25,t
+2022,788,Tunisia,0.0285,t
+2022,792,Türkiye,41.823,t
+2022,818,Egypt,0.054,t
+2022,826,United Kingdom,468.2765,t
+2022,842,USA,401.8677685,t
+2022,858,Uruguay,0.0125,t
+2022,757,Switzerland,19.567,t
+2022,490,"Other Asia, nes",5.171,t
+2022,484,Mexico,4.936,t
+2022,51,Armenia,0.068,t
+2022,422,Lebanon,0.0535,t
+2022,0,World,1329.0912995,t
+2022,8,Albania,0.015,t
+2022,12,Algeria,1.0,t
+2022,32,Argentina,0.0009625,t
+2022,36,Australia,8.0,t
+2022,70,Bosnia Herzegovina,2.658,t
+2022,76,Brazil,17.6220855,t
+2022,124,Canada,67.04718799999999,t
+2022,152,Chile,0.0035,t
+2022,170,Colombia,0.0605,t
+2022,218,Ecuador,0.035,t
+2022,320,Guatemala,0.0155,t
+2022,344,"China, Hong Kong SAR",10.92,t
+2022,360,Indonesia,0.15,t
+2022,376,Israel,0.056,t
+2022,392,Japan,128.693,t
+2022,400,Jordan,0.051,t
+2022,410,Rep. of Korea,65.559,t
+2022,156,China,60.6785,t
+2023,688,Serbia,0.1906135,t
+2023,699,India,24.2075,t
+2023,643,Russian Federation,0.475,t
+2023,788,Tunisia,0.4985,t
+2023,579,Norway,0.1,t
+2023,504,Morocco,0.5005,t
+2023,490,"Other Asia, nes",2.277,t
+2023,702,Singapore,0.612,t
+2023,604,Peru,0.031,t
+2023,704,Viet Nam,0.1175,t
+2023,858,Uruguay,0.008,t
+2023,757,Switzerland,21.196,t
+2023,764,Thailand,7.5,t
+2023,784,United Arab Emirates,5.7775,t
+2023,792,Türkiye,56.5125,t
+2023,804,Ukraine,0.55,t
+2023,818,Egypt,0.151,t
+2023,826,United Kingdom,518.2595,t
+2023,842,USA,499.865707,t
+2023,458,Malaysia,0.003,t
+2023,710,South Africa,0.0115,t
+2023,422,Lebanon,0.0385,t
+2023,484,Mexico,4.049,t
+2023,400,Jordan,0.066,t
+2023,410,Rep. of Korea,22.875,t
+2023,0,World,1440.907353,t
+2023,8,Albania,0.004,t
+2023,36,Australia,14.875,t
+2023,51,Armenia,0.0625,t
+2023,70,Bosnia Herzegovina,0.35,t
+2023,104,Myanmar,0.05,t
+2023,124,Canada,5.005214,t
+2023,152,Chile,0.004,t
+2023,156,China,44.9469645,t
+2023,76,Brazil,28.886,t
+2023,218,Ecuador,0.1465,t
+2023,222,El Salvador,0.021,t
+2023,320,Guatemala,0.0015,t
+2023,344,"China, Hong Kong SAR",34.85,t
+2023,352,Iceland,0.0008545,t
+2023,360,Indonesia,0.15,t
+2023,376,Israel,0.315,t
+2023,392,Japan,144.037,t
+2023,398,Kazakhstan,1.25,t
+2023,170,Colombia,0.079,t
+2024,699,India,3.991,t
+2024,688,Serbia,0.4365,t
+2024,682,Saudi Arabia,0.0011665,t
+2024,643,Russian Federation,0.1255,t
+2024,504,Morocco,0.0465,t
+2024,579,Norway,0.1405,t
+2024,512,Oman,0.0005,t
+2024,490,"Other Asia, nes",4.305,t
+2024,702,Singapore,0.065,t
+2024,604,Peru,0.012,t
+2024,704,Viet Nam,0.364,t
+2024,842,USA,871.2336135,t
+2024,757,Switzerland,5.2975,t
+2024,764,Thailand,12.501,t
+2024,784,United Arab Emirates,0.002,t
+2024,788,Tunisia,1.6515,t
+2024,792,Türkiye,63.801785,t
+2024,804,Ukraine,0.525595,t
+2024,807,North Macedonia,0.005,t
+2024,818,Egypt,0.0035,t
+2024,826,United Kingdom,664.91,t
+2024,858,Uruguay,0.0115,t
+2024,484,Mexico,17.2655,t
+2024,710,South Africa,0.005,t
+2024,458,Malaysia,77.93,t
+2024,860,Uzbekistan,0.0125,t
+2024,422,Lebanon,0.023,t
+2024,0,World,2040.8354185,t
+2024,32,Argentina,0.008,t
+2024,36,Australia,3.5,t
+2024,51,Armenia,0.0315,t
+2024,70,Bosnia Herzegovina,1.6105,t
+2024,76,Brazil,13.019046,t
+2024,124,Canada,33.9875,t
+2024,148,Chad,0.0035,t
+2024,152,Chile,0.001,t
+2024,156,China,27.5765,t
+2024,170,Colombia,0.076,t
+2024,434,Libya,0.0005,t
+2024,218,Ecuador,0.01,t
+2024,270,Gambia,0.0015,t
+2024,275,State of Palestine,0.0095,t
+2024,344,"China, Hong Kong SAR",86.0,t
+2024,352,Iceland,0.0015,t
+2024,368,Iraq,0.0005,t
+2024,376,Israel,0.0625,t
+2024,392,Japan,128.985,t
+2024,398,Kazakhstan,0.0022125,t
+2024,400,Jordan,0.001,t
+2024,410,Rep. of Korea,20.872,t
+2024,414,Kuwait,0.0415,t
+2024,222,El Salvador,0.0175,t
+2024,887,Yemen,0.35,t
