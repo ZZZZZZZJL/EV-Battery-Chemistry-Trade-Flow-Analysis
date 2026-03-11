@@ -3,3 +3,5 @@ pandas
 plotly
 openpyxl
 numpy
+streamlit-theme
+streamlit-sortables
