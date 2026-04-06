@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: trade-flow-opt
+    runtime: python
+    plan: starter
+    buildCommand: pip install -e .
+    startCommand: uvicorn --app-dir . battery_7step_site.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /healthz
+    autoDeploy: true

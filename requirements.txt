@@ -1,0 +1,7 @@
+fastapi
+jinja2
+numpy
+openpyxl
+pandas
+plotly
+uvicorn

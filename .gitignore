@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.coverage
+.venv/
+instance/
+output/
+output_versions/
+tmp_uvicorn*.log
+uvicorn*.log
+*.out.log
+*.err.log
+.env
