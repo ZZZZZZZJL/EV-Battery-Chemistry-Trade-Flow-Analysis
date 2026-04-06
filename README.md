@@ -2,6 +2,8 @@
 
 Deployment-ready repository for the current `trade_flow_opt` website and optimization pipelines.
 
+Live website: [trade-flow-opt.onrender.com](https://trade-flow-opt.onrender.com/)
+
 This repository is based on the previous paper
 "Electric vehicle battery chemistry affects supply chain disruption vulnerabilities"
 ([Nature Communications](https://www.nature.com/articles/s41467-024-46418-1))
