@@ -44,6 +44,22 @@ def _positive_difference(left: dict[int, float], *rights: dict[int, float]) -> d
     return result
 
 
+def _first_post_trade_balance(inputs: LithiumYearInputs) -> dict[int, float]:
+    return _sum_maps(
+        inputs.processing_brine_balance,
+        inputs.processing_lithium_ores_balance,
+        _positive_difference(inputs.processing_total, inputs.processing_brine_total, inputs.processing_lithium_ores_total),
+    )
+
+
+def _second_post_trade_balance(inputs: LithiumYearInputs) -> dict[int, float]:
+    return _sum_maps(
+        inputs.refining_hydroxide_balance,
+        inputs.refining_carbonate_balance,
+        _positive_difference(inputs.refining_total, inputs.refining_hydroxide, inputs.refining_carbonate),
+    )
+
+
 def _combined_third_trade(inputs: LithiumYearInputs) -> tuple[TradeFlow, ...]:
     return inputs.trade3_hydroxide + inputs.trade3_carbonate
 
@@ -59,7 +75,7 @@ def _build_country_payload(inputs: LithiumYearInputs):
         source_totals=inputs.mining_total,
         trade_supply=inputs.mining_total,
         direct_local={},
-        balance_map=_sum_maps(inputs.processing_brine_balance, inputs.processing_lithium_ores_balance),
+        balance_map=_first_post_trade_balance(inputs),
         target_totals=inputs.processing_total,
         known_trade=inputs.trade1,
         labels={
@@ -92,7 +108,7 @@ def _build_country_payload(inputs: LithiumYearInputs):
         source_totals=inputs.processing_total,
         trade_supply=inputs.processing_battery,
         direct_local={},
-        balance_map=_sum_maps(inputs.refining_hydroxide_balance, inputs.refining_carbonate_balance),
+        balance_map=_second_post_trade_balance(inputs),
         target_totals=inputs.refining_total,
         known_trade=inputs.trade2,
         labels={
@@ -143,7 +159,7 @@ def _build_chemistry_payload(inputs: LithiumYearInputs, aggregate_display: bool)
         source_totals=inputs.mining_total,
         trade_supply=inputs.mining_total,
         direct_local={},
-        balance_map=_sum_maps(inputs.processing_brine_balance, inputs.processing_lithium_ores_balance),
+        balance_map=_first_post_trade_balance(inputs),
         target_totals=inputs.processing_total,
         known_trade=inputs.trade1,
         labels={
@@ -176,7 +192,7 @@ def _build_chemistry_payload(inputs: LithiumYearInputs, aggregate_display: bool)
         source_totals=inputs.processing_total,
         trade_supply=inputs.processing_battery,
         direct_local={},
-        balance_map=_sum_maps(inputs.refining_hydroxide_balance, inputs.refining_carbonate_balance),
+        balance_map=_second_post_trade_balance(inputs),
         target_totals=inputs.refining_total,
         known_trade=inputs.trade2,
         labels={

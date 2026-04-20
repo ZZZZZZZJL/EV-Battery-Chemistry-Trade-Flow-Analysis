@@ -46,10 +46,25 @@ def _path_check(key: str, label: str, path: Path, required: bool = True) -> Runt
 
 def gather_runtime_status(config: BatterySiteConfig | None = None) -> RuntimeStatus:
     config = config or get_battery_site_config()
+    local_output_root = config.root_dir / "output"
+    original_root = config.original_data_root if (config.original_data_root / "baseline").exists() else local_output_root
+    first_optimization_root = (
+        config.first_optimization_data_root
+        if (config.first_optimization_data_root / "optimized").exists()
+        else local_output_root
+    )
+    diagnostics_root = (
+        config.first_optimization_diagnostics_root
+        if config.first_optimization_diagnostics_root.exists()
+        else config.instance_dir / "conversion_factor_optimization" / "output"
+    )
     checks: list[RuntimeCheck] = [
         _path_check("templates", "Templates", config.templates_dir),
         _path_check("static", "Static Assets", config.static_dir),
-        _path_check("output", "Active Output Directory", config.output_dir),
+        _path_check("data_dir", "App Data Directory", config.data_dir),
+        _path_check("original_cases", "Original Case Root", original_root),
+        _path_check("first_optimization_cases", "First Optimization Case Root", first_optimization_root),
+        _path_check("first_optimization_diagnostics", "First Optimization Diagnostics Root", diagnostics_root, required=False),
         _path_check("output_versions", "Output Versions Root", config.output_versions_root),
     ]
     errors: list[str] = []
@@ -84,4 +99,3 @@ def gather_runtime_status(config: BatterySiteConfig | None = None) -> RuntimeSta
         errors=tuple(errors),
         warnings=tuple(warnings),
     )
-

@@ -1,0 +1,1 @@
+"""Canonical web application package."""

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -11,16 +10,12 @@ from battery_7step_site.config import get_battery_site_config
 
 def _default_dataset_config() -> dict[str, Any]:
     site_config = get_battery_site_config()
-    data_root = Path(
-        os.getenv(
-            "BATTERY_SITE_DATA_ROOT",
-            str(site_config.root_dir.parent / "EV-Battery-Chemistry-Trade-Flow-Analysis_2.0" / "data"),
-        )
-    ).resolve()
+    shared_root = site_config.shared_data_root
     return {
-        "referenceFile": str(data_root / "ListOfreference.xlsx"),
-        "productionRoot": str(data_root / "production" / "country"),
-        "tradeRoot": str(data_root / "trade" / "import"),
+        "referenceFile": str(site_config.reference_file_path),
+        "productionRoot": str(shared_root / "production" / "country"),
+        "tradeRoot": str(shared_root / "trade" / "import"),
+        "rawImportRoot": str(shared_root / "trade" / "raw_import_by_partner"),
     }
 
 

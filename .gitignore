@@ -4,7 +4,10 @@ __pycache__/
 .mypy_cache/
 .coverage
 .venv/
+data/
 instance/
+instance/conversion_factor_optimization/
+instance/runtime/
 output/
 output_versions/
 tmp_uvicorn*.log

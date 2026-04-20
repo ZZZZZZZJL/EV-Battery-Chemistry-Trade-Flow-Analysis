@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 from copy import deepcopy
+from functools import lru_cache
 import re
 from typing import Any
 
@@ -10,6 +11,7 @@ from battery_7step_site.services.precomputed_repository import (
     OutputRepository,
     SCENARIO_LABELS,
     TABLE_VIEW_LABELS,
+    get_repository,
 )
 from battery_7step_site.services.shared_sankey import (
     BODY_TEXT_BY_THEME,
@@ -44,7 +46,7 @@ from battery_7step_site.services.shared_sankey import (
 
 
 DEFAULT_METAL = "Ni"
-RESULT_MODES = ("baseline", "optimized_v3", "optimized_v4")
+RESULT_MODES = ("baseline", "first_optimization")
 SORT_MODES = ("size", "manual", "continent")
 SPECIAL_NODE_POSITIONS = ("first", "last")
 DEFAULT_SPECIAL_POSITION = "first"
@@ -243,6 +245,25 @@ def default_reference_quantity_for_metal(metal: str) -> float:
     return float(DEFAULT_REFERENCE_QTY_BY_METAL.get(metal, DEFAULT_REFERENCE_QTY))
 
 
+def _uses_default_layout(
+    sort_modes: dict[str, str] | None,
+    stage_orders: dict[str, list[str]] | None,
+    special_positions: dict[str, str] | None,
+    aggregate_counts: dict[str, int] | None,
+) -> bool:
+    return not any((sort_modes or {}, stage_orders or {}, special_positions or {}, aggregate_counts or {}))
+
+
+def _reference_qty_matches_default(metal: str, reference_qty: float | None) -> bool:
+    if reference_qty is None:
+        return True
+    return abs(float(reference_qty) - default_reference_quantity_for_metal(metal)) <= EPSILON
+
+
+def _cacheable_table_view(table_view: str) -> str:
+    return table_view if table_view in {"auto", "compare", "baseline", "optimized"} else "auto"
+
+
 def _manual_sort(rows: list[dict[str, Any]], manual_order: list[str]) -> list[dict[str, Any]]:
     by_label = {str(row["label"]): row for row in rows}
     ordered = [by_label[label] for label in manual_order if label in by_label]
@@ -427,15 +448,13 @@ def _build_stage_summary(repo: OutputRepository, metal: str, year: int, scenario
 def _dataset_status(repo: OutputRepository, metal: str, year: int, scenario: str, table_view: str, cobalt_mode: str = DEFAULT_COBALT_MODE) -> dict[str, dict[str, Any]]:
     resolved_table = _resolved_table_view(scenario, table_view)
     baseline_case = repo.case_dir(metal, year, "baseline")
-    optimized_v3_case = repo.case_dir(metal, year, "optimized_v3")
-    optimized_v4_case = repo.case_dir(metal, year, "optimized_v4")
+    first_optimization_case = repo.case_dir(metal, year, "first_optimization")
     comparison_dir = repo.scenario_comparison_dirs.get(scenario, repo.comparison_dir)
     suffix = f" ({COBALT_MODE_LABELS.get(cobalt_mode, cobalt_mode)})" if metal == "Co" else ""
     payload = {
         f"Current Result Folder{suffix}": {"exists": True, "label": repo.case_dir(metal, year, scenario).name},
         f"Original Export{suffix}": {"exists": baseline_case.exists(), "label": baseline_case.name},
-        f"First Optimization Export{suffix}": {"exists": optimized_v3_case.exists(), "label": optimized_v3_case.name},
-        f"Second Optimization Export{suffix}": {"exists": optimized_v4_case.exists(), "label": optimized_v4_case.name},
+        f"First Optimization Export{suffix}": {"exists": first_optimization_case.exists(), "label": first_optimization_case.name},
         "Comparison Tables": {"exists": comparison_dir.exists(), "label": comparison_dir.name},
         "Table Source": {"exists": True, "label": TABLE_VIEW_LABELS.get(resolved_table, resolved_table)},
     }
@@ -602,7 +621,7 @@ def _apply_access_mode(payload: dict[str, Any], access_mode: str) -> dict[str, A
     return payload
 
 
-def build_app_payload(
+def _build_app_payload_uncached(
     repo: OutputRepository,
     metal: str,
     year: int,
@@ -647,16 +666,12 @@ def build_app_payload(
 
     compare_mode = "compare" if scenario != "baseline" else "baseline"
     transition_note = (
-        "Original-only diagnostics are shown in this mode. Per-HS optimization cards appear when you switch to a versioned optimization result."
+        "Original-only diagnostics are shown in this mode. Stage-level optimization diagnostics appear when you switch to First Optimization."
         if scenario == "baseline"
         else (
-            "First Optimization diagnostics show import-only, HS-specific coefficient calibration. Cards summarize producer sets, PP / PN / NP edge mix, flow deltas, boundary pressure, and shared V3 penalties while synthetic no-HS transitions remain at the baseline and are omitted."
-            if scenario == "optimized_v3"
-            else (
-                "Second Optimization diagnostics add PP-prioritized cap allocation and split Unknown Source / Destination accounting while still staying import-only and HS-specific."
-                if scenario == "optimized_v4"
-                else "Diagnostics compare Original against the selected optimization version. Per-HS cards come from the corresponding optimization log, and placeholder transitions without a real HS code are omitted."
-            )
+            "First Optimization now renders the latest conversion_factor_optimization result after synchronizing it into the published runtime snapshot. The non-guest tables below Sorting Studio summarize stage outcomes, bounds, special handling, source scaling, and A / B / G / NN coefficients."
+            if scenario == "first_optimization"
+            else "Diagnostics summarize the selected optimization output."
         )
     )
 
@@ -683,10 +698,10 @@ def build_app_payload(
         "tables": {
             "metrics": repo.build_metric_rows(metal, year, scenario, compare_mode, cobalt_mode),
             "stages": repo.build_stage_rows(metal, year, scenario, compare_mode, cobalt_mode),
-            "parameters": repo.build_parameter_rows(metal, scenario, compare_mode, cobalt_mode),
+            "parameters": repo.build_parameter_rows(metal, scenario, compare_mode, cobalt_mode, year),
             "metricsActive": repo.build_metric_rows(metal, year, scenario, table_view, cobalt_mode),
             "stagesActive": repo.build_stage_rows(metal, year, scenario, table_view, cobalt_mode),
-            "parametersActive": repo.build_parameter_rows(metal, scenario, table_view, cobalt_mode),
+            "parametersActive": repo.build_parameter_rows(metal, scenario, table_view, cobalt_mode, year),
             "producerCoefficients": repo.get_producer_coefficient_rows(metal, year, scenario, cobalt_mode),
             "transitions": repo.get_transition_rows(metal, year, scenario, cobalt_mode),
             "activeTableView": resolved_table_view,
@@ -694,3 +709,124 @@ def build_app_payload(
         },
     }
     return _apply_access_mode(payload, access_mode)
+
+
+@lru_cache(maxsize=512)
+def _build_default_payload_cached(
+    metal: str,
+    year: int,
+    scenario: str,
+    table_view: str,
+    reference_qty: float,
+    theme: str,
+    cobalt_mode: str,
+    access_mode: str,
+) -> dict[str, Any]:
+    repo = get_repository()
+    return _build_app_payload_uncached(
+        repo,
+        metal,
+        year,
+        scenario,
+        table_view,
+        reference_qty=reference_qty,
+        theme=theme,
+        sort_modes={},
+        stage_orders={},
+        special_positions={},
+        aggregate_counts={},
+        cobalt_mode=cobalt_mode,
+        access_mode=access_mode,
+    )
+
+
+def clear_default_payload_cache() -> None:
+    _build_default_payload_cached.cache_clear()
+
+
+def default_payload_cache_info() -> dict[str, int]:
+    info = _build_default_payload_cached.cache_info()
+    return {
+        "hits": int(info.hits),
+        "misses": int(info.misses),
+        "maxsize": int(info.maxsize or 0),
+        "currsize": int(info.currsize),
+    }
+
+
+def warm_default_payload_cache() -> dict[str, Any]:
+    repo = get_repository()
+    warmed = 0
+    for metal in repo.metals:
+        reference_qty = default_reference_quantity_for_metal(metal)
+        cobalt_modes = COBALT_MODES if metal == "Co" else ("mid",)
+        for year in repo.years:
+            for scenario in RESULT_MODES:
+                for theme in THEME_MODES:
+                    for access_mode in ("guest", "analyst"):
+                        for cobalt_mode in cobalt_modes:
+                            _build_default_payload_cached(
+                                metal,
+                                year,
+                                scenario,
+                                "compare",
+                                reference_qty,
+                                theme,
+                                cobalt_mode,
+                                access_mode,
+                            )
+                            warmed += 1
+    return {
+        "warmedPayloads": warmed,
+        "cache": default_payload_cache_info(),
+    }
+
+
+def build_app_payload(
+    repo: OutputRepository,
+    metal: str,
+    year: int,
+    scenario: str,
+    table_view: str,
+    reference_qty: float | None = DEFAULT_REFERENCE_QTY,
+    theme: str = DEFAULT_THEME,
+    sort_modes: dict[str, str] | None = None,
+    stage_orders: dict[str, list[str]] | None = None,
+    special_positions: dict[str, str] | None = None,
+    aggregate_counts: dict[str, int] | None = None,
+    cobalt_mode: str = DEFAULT_COBALT_MODE,
+    access_mode: str = "analyst",
+) -> dict[str, Any]:
+    runtime_repo = get_repository()
+    if (
+        repo is runtime_repo
+        and _uses_default_layout(sort_modes, stage_orders, special_positions, aggregate_counts)
+        and _reference_qty_matches_default(metal, reference_qty)
+    ):
+        return deepcopy(
+            _build_default_payload_cached(
+                metal,
+                year,
+                scenario,
+                _cacheable_table_view(table_view),
+                default_reference_quantity_for_metal(metal),
+                theme,
+                cobalt_mode,
+                access_mode,
+            )
+        )
+    return _build_app_payload_uncached(
+        repo,
+        metal,
+        year,
+        scenario,
+        table_view,
+        reference_qty=reference_qty,
+        theme=theme,
+        sort_modes=sort_modes,
+        stage_orders=stage_orders,
+        special_positions=special_positions,
+        aggregate_counts=aggregate_counts,
+        cobalt_mode=cobalt_mode,
+        access_mode=access_mode,
+    )

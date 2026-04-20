@@ -34,23 +34,28 @@ const dragState = {
 };
 
 const numberFormatter = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
-
+const PLOTLY_CONFIG = {
+  responsive: true,
+  displaylogo: false,
+  modeBarButtonsToRemove: ["lasso2d", "select2d", "autoScale2d"],
+};
 
 let layoutSyncToken = 0;
+let figureRenderToken = 0;
 
 function syncWorkspaceLayout(chartHeightHint = state.lastChartHeight || 0) {
   const workspaceMain = document.querySelector(".workspace-main");
   const workspaceSide = document.querySelector(".workspace-side");
   const chartFrame = document.querySelector(".chart-frame");
   const chartHost = document.getElementById("chart");
-  if (!workspaceMain || !workspaceSide || !chartFrame || !chartHost) {
+  if (!workspaceMain || !chartFrame || !chartHost) {
     return;
   }
 
   const intrinsicHeight = Math.max(Number(chartHeightHint) || 0, chartHost.offsetHeight || 0, 760);
   chartFrame.style.minHeight = `${Math.ceil(intrinsicHeight)}px`;
 
-  if (window.innerWidth <= 1080) {
+  if (!workspaceSide || window.innerWidth <= 1080) {
     return;
   }
 
@@ -277,6 +282,9 @@ function renderSummary(summary) {
 
 function renderNotes(notes) {
   const host = document.getElementById("notes-list");
+  if (!host) {
+    return;
+  }
   host.innerHTML = "";
   notes.forEach((note) => {
     const item = document.createElement("div");
@@ -288,6 +296,9 @@ function renderNotes(notes) {
 
 function renderDatasetStatus(datasetStatus) {
   const host = document.getElementById("dataset-status");
+  if (!host) {
+    return;
+  }
   host.innerHTML = "";
   Object.entries(datasetStatus).forEach(([key, value]) => {
     const item = document.createElement("div");
@@ -300,6 +311,14 @@ function renderDatasetStatus(datasetStatus) {
     `;
     host.appendChild(item);
   });
+}
+
+function showUiError(message, statusText = "Error") {
+  setStatus(statusText, "warn");
+  const host = document.getElementById("notes-list");
+  if (host) {
+    host.innerHTML = `<div class="note-item">${escapeHtml(message)}</div>`;
+  }
 }
 
 function syncManualOrder(stage, items) {
@@ -363,7 +382,12 @@ function getRenderedItems(stage, config) {
   return config.items;
 }
 
+async function renderChartFigure(figure) {
+  await Plotly.react("chart", figure.data, figure.layout, PLOTLY_CONFIG);
+}
+
 async function loadFigure() {
+  const renderToken = ++figureRenderToken;
   setStatus("Loading", "warn");
   const layout = currentLayoutState();
   const response = await fetch("/api/figure", {
@@ -392,11 +416,13 @@ async function loadFigure() {
     throw new Error(payload.detail || "Request failed");
   }
   const payload = await response.json();
+  if (renderToken !== figureRenderToken) {
+    return;
+  }
   state.metal = payload.metal;
   state.cobaltMode = payload.cobaltMode || state.cobaltMode;
   state.resultMode = payload.resultMode;
   state.accessMode = payload.accessMode || state.accessMode;
-  applyTheme(payload.theme);
   renderThemeButtons();
   renderMetalButtons();
   renderCobaltModeButtons();
@@ -428,16 +454,15 @@ async function loadFigure() {
   renderTables(payload.tables);
   document.getElementById("table-status").textContent =
     state.accessMode === "guest"
-      ? "Diagnostics are hidden in guest mode."
+        ? "Diagnostics are hidden in guest mode."
       : state.resultMode === "baseline"
-        ? `Diagnostics: Original only / Figure: ${resultModeLabel(payload.resultMode)}`
-        : `Diagnostics: Original vs ${resultModeLabel(payload.resultMode)} / Figure: ${resultModeLabel(payload.resultMode)}`;
+        ? `Diagnostics: Original only. Switch to First Optimization for optimizer-stage summaries.`
+        : `Diagnostics: ${resultModeLabel(payload.resultMode)} stage summaries, bounds, source scaling, and A/B/G/NN coefficients.`;
   state.lastChartHeight = Number(payload.figure?.layout?.height || 0);
-  await Plotly.react("chart", payload.figure.data, payload.figure.layout, {
-    responsive: true,
-    displaylogo: false,
-    modeBarButtonsToRemove: ["lasso2d", "select2d", "autoScale2d"],
-  });
+  await renderChartFigure(payload.figure);
+  if (renderToken !== figureRenderToken) {
+    return;
+  }
   syncWorkspaceLayout(state.lastChartHeight);
   setStatus("Ready", "ok");
 }
@@ -810,7 +835,7 @@ function buildCustomDeltaBadge(value, cssClass, key = "delta") {
   return `<span class="delta-badge ${cssClass}">${escapeHtml(`${prefix}${formatValue(value, key)}`)}</span>`;
 }
 
-function buildMetricsTableHtml(rows) {
+function buildCompareMetricsTableHtml(rows) {
   if (!rows || !rows.length) {
     return `<div class="order-empty">No rows available for the current selection.</div>`;
   }
@@ -844,7 +869,7 @@ function buildMetricsTableHtml(rows) {
   `;
 }
 
-function buildStageTableHtml(rows) {
+function buildCompareStageTableHtml(rows) {
   if (!rows || !rows.length) {
     return `<div class="order-empty">No rows available for the current selection.</div>`;
   }
@@ -880,7 +905,7 @@ function buildStageTableHtml(rows) {
   `;
 }
 
-function buildParameterTableHtml(rows) {
+function buildCompareParameterTableHtml(rows) {
   if (!rows || !rows.length) {
     return `<div class="order-empty">No rows available for the current selection.</div>`;
   }
@@ -907,6 +932,278 @@ function buildParameterTableHtml(rows) {
           .join("")}
       </tbody>
     </table>
+  `;
+}
+
+function isPresent(value) {
+  return value !== null && value !== undefined && value !== "";
+}
+
+function normalizeLabel(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function shortenText(value, maxLength = 180) {
+  const normalized = String(value || "").replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, maxLength - 3)).trim()}...`;
+}
+
+function extractLabel(row) {
+  return row?.label || row?.Metric || row?.metric || row?.Parameter || row?.parameter || row?.["Stage Group"] || row?.stage || "";
+}
+
+function extractValue(row) {
+  return row?.Value ?? row?.value ?? row?.optimized ?? row?.baseline ?? "";
+}
+
+function extractNote(row) {
+  return row?.Note || row?.note || "";
+}
+
+function findRowByLabel(rows, label) {
+  const normalizedTarget = normalizeLabel(label);
+  return (rows || []).find((row) => normalizeLabel(extractLabel(row)) === normalizedTarget);
+}
+
+function findPanelByTitle(row, title) {
+  return (row?.diagnostic_panels || []).find((panel) => normalizeLabel(panel.title) === normalizeLabel(title));
+}
+
+function findItemByLabel(items, label) {
+  return (items || []).find((item) => normalizeLabel(item.label) === normalizeLabel(label));
+}
+
+function buildMetricHighlightHtml(item) {
+  const value = isPresent(item?.value) ? formatValue(item.value, item.label || "value") : "-";
+  return `
+    <article class="diagnostic-highlight${item?.className ? ` ${item.className}` : ""}">
+      <span>${escapeHtml(item?.label || "")}</span>
+      <strong>${escapeHtml(value)}</strong>
+      ${item?.note ? `<small>${escapeHtml(item.note)}</small>` : ""}
+    </article>
+  `;
+}
+
+function buildFactTileHtml(item) {
+  const label = item?.label || "";
+  const value = isPresent(item?.value) ? formatValue(item.value, label || "value") : "-";
+  return `
+    <article class="diagnostic-fact${item?.className ? ` ${item.className}` : ""}">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+      ${item?.note ? `<small>${escapeHtml(item.note)}</small>` : ""}
+    </article>
+  `;
+}
+
+function buildStageStatHtml(item) {
+  const value = isPresent(item?.value) ? formatValue(item.value, item.label || "value") : "-";
+  return `
+    <article class="stage-stat${item?.className ? ` ${item.className}` : ""}">
+      <span>${escapeHtml(item?.label || "")}</span>
+      <strong>${escapeHtml(value)}</strong>
+    </article>
+  `;
+}
+
+function buildMetricSnapshotHtml(rows) {
+  if (!rows || !rows.length) {
+    return `<div class="order-empty">No rows available for the current selection.</div>`;
+  }
+
+  const normalizedRows = rows.map((row) => ({
+    label: extractLabel(row),
+    value: extractValue(row),
+    note: extractNote(row),
+  }));
+  const isOptimizationSnapshot = normalizedRows.some((row) => normalizeLabel(row.label) === "supported stage groups");
+
+  const highlightLabels = isOptimizationSnapshot
+    ? ["Supported Stage Groups", "SN Reduction", "SN Reduction Pct", "A / B / G / NN Rows"]
+    : ["Unknown Total", "Total Special", "Total Regular", "Structural Sink"];
+  const highlightSet = new Set(highlightLabels.map(normalizeLabel));
+  const highlights = highlightLabels
+    .map((label) => normalizedRows.find((row) => normalizeLabel(row.label) === normalizeLabel(label)))
+    .filter(Boolean);
+  const detailRows = normalizedRows.filter((row) => !highlightSet.has(normalizeLabel(row.label)));
+
+  return `
+    <div class="diagnostic-highlight-grid">
+      ${highlights.map((item) => buildMetricHighlightHtml(item)).join("")}
+    </div>
+    <div class="diagnostic-fact-grid">
+      ${detailRows.map((item) => buildFactTileHtml(item)).join("")}
+    </div>
+  `;
+}
+
+function buildStageOutcomeCardHtml(row, isOptimizationView) {
+  if (isOptimizationView) {
+    const coefficientTotal = ["A Rows", "B Rows", "G Rows", "NN Rows"].reduce(
+      (sum, key) => sum + (Number(row[key]) || 0),
+      0,
+    );
+    const statusValue = String(row.Status || "Recorded");
+    const statusClass =
+      normalizeLabel(statusValue) === "success"
+        ? "positive"
+        : isPresent(row.Failure)
+          ? "negative"
+          : "neutral";
+    const headlineNote = row.Failure || `${formatValue(row.Countries, "Countries")} countries | ${formatValue(row["HS Codes"], "HS Codes")} HS codes | ${formatValue(coefficientTotal, "Coefficient Rows")} coefficient rows`;
+    const detailItems = [
+      { label: "Countries", value: row.Countries },
+      { label: "HS codes", value: row["HS Codes"] },
+      { label: "Coefficient rows", value: coefficientTotal },
+      { label: "Bound hits", value: row["Bound Hits"] },
+      { label: "Scaled sources", value: row["Scaled Sources"] },
+      { label: "Special total", value: row["Special Total"] },
+      { label: "Overflow before scaling", value: row["Overflow Before Scaling"] },
+    ];
+
+    return `
+      <article class="stage-outcome-card">
+        <div class="stage-outcome-head">
+          <div>
+            <span class="transition-eyebrow">Stage Group</span>
+            <h4>${escapeHtml(row["Stage Group"] || "Stage Group")}</h4>
+            <p>${escapeHtml(shortenText(headlineNote, 160))}</p>
+          </div>
+          <span class="delta-badge ${statusClass}">${escapeHtml(statusValue)}</span>
+        </div>
+        <div class="stage-stat-grid">
+          ${[
+            { label: "Original SN", value: row["Original SN"] },
+            { label: "Optimized SN", value: row["Optimized SN"] },
+            { label: "Reduction Pct", value: row["Reduction Pct"] },
+          ]
+            .map((item) => buildStageStatHtml(item))
+            .join("")}
+        </div>
+        <div class="diagnostic-fact-grid diagnostic-fact-grid-compact">
+          ${detailItems.map((item) => buildFactTileHtml(item)).join("")}
+        </div>
+      </article>
+    `;
+  }
+
+  return `
+    <article class="stage-outcome-card">
+      <div class="stage-outcome-head">
+        <div>
+          <span class="transition-eyebrow">Original Export</span>
+          <h4>${escapeHtml(row.stage || "Stage")}</h4>
+          <p>Precomputed baseline totals before optimization-specific adjustments.</p>
+        </div>
+        <span class="delta-badge neutral">Original</span>
+      </div>
+      <div class="stage-stat-grid">
+        ${[
+          { label: "Total Flow", value: row.total_value },
+          { label: "Unknown Total", value: row.unknown_total },
+          { label: "Special Total", value: row.special_total },
+        ]
+          .map((item) => buildStageStatHtml(item))
+          .join("")}
+      </div>
+    </article>
+  `;
+}
+
+function buildStageOutcomeCardsHtml(rows) {
+  if (!rows || !rows.length) {
+    return `<div class="order-empty">No rows available for the current selection.</div>`;
+  }
+  const isOptimizationView = Object.prototype.hasOwnProperty.call(rows[0], "Stage Group");
+  return `
+    <div class="stage-outcome-grid">
+      ${rows.map((row) => buildStageOutcomeCardHtml(row, isOptimizationView)).join("")}
+    </div>
+  `;
+}
+
+function buildParameterItemHtml(row) {
+  const label = extractLabel(row);
+  const value = extractValue(row);
+  const note = extractNote(row);
+  return `
+    <article class="parameter-item">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(isPresent(value) ? formatValue(value, label || "value") : "-")}</strong>
+      ${note ? `<small>${escapeHtml(shortenText(note, 220))}</small>` : ""}
+    </article>
+  `;
+}
+
+function buildParameterGroupHtml(title, subtitle, rows) {
+  if (!rows.length) {
+    return "";
+  }
+  return `
+    <section class="parameter-group-card">
+      <div class="transition-panel-head">
+        <strong>${escapeHtml(title)}</strong>
+        <span>${escapeHtml(subtitle)}</span>
+      </div>
+      <div class="parameter-item-grid">
+        ${rows.map((row) => buildParameterItemHtml(row)).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function buildParameterOverviewHtml(rows) {
+  if (!rows || !rows.length) {
+    return `<div class="order-empty">No rows available for the current selection.</div>`;
+  }
+
+  const normalizedRows = rows.map((row) => ({
+    label: extractLabel(row),
+    value: extractValue(row),
+    note: extractNote(row),
+  }));
+  const hasFirstOptimizationGroups = normalizedRows.some((row) => normalizeLabel(row.label) === "data source");
+
+  if (!hasFirstOptimizationGroups) {
+    return `
+      <div class="parameter-group-grid parameter-group-grid-single">
+        ${buildParameterGroupHtml(
+          "Original Mode",
+          "Baseline mode does not introduce optimizer weights, bounds, or synchronized factor diagnostics.",
+          normalizedRows,
+        )}
+      </div>
+    `;
+  }
+
+  const runtimeRows = ["Data Source", "Result Sync", "Solver"].map((label) => findRowByLabel(normalizedRows, label)).filter(Boolean);
+  const weightRows = ["alpha", "beta_pp", "beta_pn", "beta_np", "beta_nn"].map((label) => findRowByLabel(normalizedRows, label)).filter(Boolean);
+  const boundsRows = ["Bounds", "Source Scaling", "Special Handling", "HS Memo Rules"].map((label) => findRowByLabel(normalizedRows, label)).filter(Boolean);
+
+  return `
+    <div class="parameter-group-grid">
+      ${buildParameterGroupHtml(
+        "Runtime Snapshot",
+        "Which optimizer output is rendered and how it becomes the published runtime view.",
+        runtimeRows,
+      )}
+      ${buildParameterGroupHtml(
+        "Objective Weights",
+        "Active weights used for SN reduction and coefficient movement penalties.",
+        weightRows,
+      )}
+      ${buildParameterGroupHtml(
+        "Bounds, Scaling And HS Memo",
+        "Constraint behavior, special handling, source scaling, and memo-driven HS rules.",
+        boundsRows,
+      )}
+    </div>
   `;
 }
 
@@ -943,14 +1240,38 @@ function buildKeyValueGrid(items, emptyText) {
   `;
 }
 
-function buildTransitionPanelHtml(panel) {
+function buildDiagnosticListHtml(items, emptyText = "No rows were recorded for this section.") {
+  const visibleItems = (items || []).filter((item) => isPresent(item?.value) || item?.note);
+  if (!visibleItems.length) {
+    return `<div class="order-empty">${escapeHtml(emptyText)}</div>`;
+  }
   return `
-    <section class="transition-panel">
+    <div class="diagnostic-list">
+      ${visibleItems
+        .map((item) => {
+          const label = item.label || "";
+          const value = isPresent(item.value) ? formatValue(item.value, label || "value") : "-";
+          return `
+            <article class="diagnostic-list-item">
+              <strong>${escapeHtml(label)}</strong>
+              <span>${escapeHtml(value)}</span>
+              ${item.note ? `<small>${escapeHtml(shortenText(item.note, 220))}</small>` : ""}
+            </article>
+          `;
+        })
+        .join("")}
+    </div>
+  `;
+}
+
+function buildStageDiagnosticSectionHtml(title, subtitle, contentHtml, extraClass = "") {
+  return `
+    <section class="diagnostic-section${extraClass ? ` ${extraClass}` : ""}">
       <div class="transition-panel-head">
-        <strong>${escapeHtml(panel.title || "Diagnostics")}</strong>
-        <span>${escapeHtml(panel.subtitle || "")}</span>
+        <strong>${escapeHtml(title)}</strong>
+        <span>${escapeHtml(subtitle)}</span>
       </div>
-      ${buildKeyValueGrid(panel.items, panel.emptyText || "No rows were recorded for this panel.")}
+      ${contentHtml}
     </section>
   `;
 }
@@ -958,31 +1279,63 @@ function buildTransitionPanelHtml(panel) {
 function buildTransitionCardHtml(row) {
   const signalLabel = row.signal_label || (row.has_signal ? "Tuned" : "No visible adjustment");
   const signalClass = row.signal_class || (row.has_signal ? "positive" : "neutral");
-  const diagnosticPills = row.diagnostic_pills || [
-    { label: "Stage Unknown", value: row.stage_unknown_total, tone: "unknown" },
-    { label: "Non-Source", value: row.non_source_total, tone: "source" },
-    { label: "Non-Target", value: row.non_target_total, tone: "target" },
-  ];
-  const diagnosticPanels = row.diagnostic_panels || [
-    {
-      title: "Priority Multipliers",
-      subtitle: "Country-level scale shifts",
-      items: row.multiplier_pairs,
-      emptyText: "No country-level multipliers were applied for this HS folder.",
-    },
-    {
-      title: "Applied Hyperparameters",
-      subtitle: "Shared metal-level setting set",
-      items: row.parameter_pairs,
-      emptyText: "No hyperparameter signature was recorded.",
-    },
-  ];
+  const diagnosticPills = row.diagnostic_pills || [];
+  const outcomePanel = findPanelByTitle(row, "Outcome");
+  const coveragePanel = findPanelByTitle(row, "Coefficient Coverage");
+  const scalingPanel = findPanelByTitle(row, "Sankey Scaling");
+  const boundsPanel = findPanelByTitle(row, "Bounds");
+  const specialPanel = findPanelByTitle(row, "Special Handling");
+  const exposurePanel = findPanelByTitle(row, "Top HS Exposure");
+  const setupPanel = findPanelByTitle(row, "Run Setup");
+  const failureValue = findItemByLabel(outcomePanel?.items, "Failure")?.value;
+
+  const outcomeFacts = [
+    findItemByLabel(outcomePanel?.items, "Countries"),
+    findItemByLabel(coveragePanel?.items, "HS codes"),
+    findItemByLabel(outcomePanel?.items, "Original SN"),
+    findItemByLabel(outcomePanel?.items, "Optimized SN"),
+    findItemByLabel(outcomePanel?.items, "Reduction Pct"),
+  ].filter(Boolean);
+  const coverageFacts = [
+    findItemByLabel(coveragePanel?.items, "A rows"),
+    findItemByLabel(coveragePanel?.items, "B rows"),
+    findItemByLabel(coveragePanel?.items, "G rows"),
+    findItemByLabel(coveragePanel?.items, "NN rows"),
+    findItemByLabel(coveragePanel?.items, "Total rows"),
+  ].filter(Boolean);
+  const boundsAndScalingFacts = [
+    findItemByLabel(boundsPanel?.items, "Lower hits"),
+    findItemByLabel(boundsPanel?.items, "Upper hits"),
+    findItemByLabel(boundsPanel?.items, "Bound hits"),
+    findItemByLabel(boundsPanel?.items, "Interior rows"),
+    findItemByLabel(scalingPanel?.items, "Scaled sources"),
+    findItemByLabel(scalingPanel?.items, "Overflow before scaling"),
+    findItemByLabel(scalingPanel?.items, "Worst scale ratio"),
+    findItemByLabel(scalingPanel?.items, "Residual self / non-target fill"),
+  ].filter(Boolean);
+  const specialSummaryFacts = [
+    findItemByLabel(specialPanel?.items, "Representative total"),
+    findItemByLabel(specialPanel?.items, "Adjustment types"),
+  ].filter(Boolean);
+  const specialBreakoutItems = (specialPanel?.items || [])
+    .filter(
+      (item) =>
+        ![
+          "representative total",
+          "adjustment types",
+        ].includes(normalizeLabel(item.label)),
+    )
+    .slice(0, 4);
+  const setupItems = (setupPanel?.items || []).slice(0, 5);
+  const exposureItems = (exposurePanel?.items || []).slice(0, 5);
+  const cardTitle = row.card_title || row.folder_display || "Stage Diagnostic";
+
   return `
-    <article class="transition-card ${row.diagnostic_kind === "v3" ? "transition-card-v3" : ""}">
+    <article class="transition-card transition-stage-card">
       <div class="transition-card-head">
         <div>
           <span class="transition-eyebrow">${escapeHtml(row.transition_display || row.transition || "")}</span>
-          <h4>${escapeHtml(row.folder_display || row.folder_name || "")}</h4>
+          <h4>${escapeHtml(cardTitle)}</h4>
           <p>${escapeHtml(row.card_note || row.folder_group || "")}</p>
         </div>
         <span class="delta-badge ${signalClass}">${escapeHtml(signalLabel)}</span>
@@ -990,48 +1343,182 @@ function buildTransitionCardHtml(row) {
       <div class="transition-pill-row">
         ${diagnosticPills.map((item) => buildTransitionMetricPill(item)).join("")}
       </div>
-      <div class="transition-detail-grid">
-        ${diagnosticPanels.map((panel) => buildTransitionPanelHtml(panel)).join("")}
+      <div class="stage-diagnostic-grid">
+        ${buildStageDiagnosticSectionHtml(
+          "Run Outcome",
+          "Stage-group size, SN totals, and reduction after synchronization into the published snapshot.",
+          `<div class="diagnostic-fact-grid diagnostic-fact-grid-compact">${outcomeFacts.map((item) => buildFactTileHtml(item)).join("")}</div>`,
+        )}
+        ${buildStageDiagnosticSectionHtml(
+          "Coefficient Coverage",
+          "How many A / B / G / NN rows were emitted for this stage group.",
+          `<div class="diagnostic-fact-grid diagnostic-fact-grid-compact">${coverageFacts.map((item) => buildFactTileHtml(item)).join("")}</div>`,
+        )}
+        ${buildStageDiagnosticSectionHtml(
+          "Bounds And Scaling",
+          "Constraint pressure and any source-side rescaling required before residual fill.",
+          `<div class="diagnostic-fact-grid diagnostic-fact-grid-compact">${boundsAndScalingFacts.map((item) => buildFactTileHtml(item)).join("")}</div>`,
+        )}
+        ${buildStageDiagnosticSectionHtml(
+          "Special Handling",
+          "Representative excluded volume plus the largest mirrored or bypass adjustments recorded here.",
+          `
+            <div class="diagnostic-fact-grid diagnostic-fact-grid-compact">
+              ${specialSummaryFacts.map((item) => buildFactTileHtml(item)).join("")}
+            </div>
+            ${buildDiagnosticListHtml(
+              specialBreakoutItems,
+              specialPanel?.emptyText || "No special-case adjustments were recorded for this stage group.",
+            )}
+          `,
+        )}
+        ${buildStageDiagnosticSectionHtml(
+          "Top HS Exposure",
+          "Largest raw-trade HS series contributing to this stage-group run.",
+          buildDiagnosticListHtml(
+            exposureItems,
+            exposurePanel?.emptyText || "No HS exposure rows were recorded for this stage group.",
+          ),
+        )}
+        ${buildStageDiagnosticSectionHtml(
+          "Run Setup",
+          "Solver, weights, bounds, source scaling, and memo rules carried by the optimizer output.",
+          buildDiagnosticListHtml(
+            setupItems,
+            setupPanel?.emptyText || "No setup notes were recorded for this stage group.",
+          ),
+        )}
       </div>
+      ${
+        isPresent(failureValue)
+          ? `<div class="diagnostic-inline-note warn">${escapeHtml(String(failureValue))}</div>`
+          : ""
+      }
     </article>
   `;
 }
 
 function buildProducerCoefficientSectionsHtml(rows) {
   if (!rows || !rows.length) {
-    return `<div class="order-empty">Producer-country coefficient rows are only available for First Optimization.</div>`;
+    return `<div class="order-empty">Coefficient rows are only available when First Optimization exposes factor outputs.</div>`;
   }
 
-  const intro = `
-    <section class="producer-coefficient-intro">
-      <p>
-        Only active for First Optimization. Each table keeps the V3 producer-linked coefficients visible outside the
-        per-HS cards and groups them by post-trade stage first, then by HS code.
-      </p>
-      <div class="producer-legend-grid">
-        <article class="producer-legend-item">
-          <strong>PP</strong>
-          <span>Producer -> Producer. A pair-specific coefficient for a source producer shipping to a target producer.</span>
-        </article>
-        <article class="producer-legend-item">
-          <strong>PN</strong>
-          <span>Producer -> Non-producer. One shared coefficient for a source producer shipping this HS code to all non-target producers.</span>
-        </article>
-        <article class="producer-legend-item">
-          <strong>NP</strong>
-          <span>Non-producer -> Producer. One shared coefficient for a target producer receiving this HS code from all non-source exporters.</span>
-        </article>
-        <article class="producer-legend-item">
-          <strong>Exposure</strong>
-          <span>The raw import volume governed by that coefficient in the selected year.</span>
-        </article>
-        <article class="producer-legend-item">
-          <strong>Exposure Share</strong>
-          <span>The coefficient exposure divided by the total raw trade volume of that transition-HS series in the selected year.</span>
-        </article>
-      </div>
-    </section>
-  `;
+  const classSet = new Set(rows.map((row) => row.coefficient_class));
+  const usesAbg = classSet.has("A") || classSet.has("B") || classSet.has("G") || classSet.has("NN");
+  const classCounts = rows.reduce((accumulator, row) => {
+    const key = row.coefficient_class || "Unknown";
+    accumulator[key] = (accumulator[key] || 0) + 1;
+    return accumulator;
+  }, {});
+  const boundCounts = rows.reduce((accumulator, row) => {
+    const key = row.bound_status || "Unknown";
+    accumulator[key] = (accumulator[key] || 0) + 1;
+    return accumulator;
+  }, {});
+  const transitionCounts = rows.reduce((accumulator, row) => {
+    const key = row.transition_display || row.transition || "Transition";
+    accumulator[key] = (accumulator[key] || 0) + 1;
+    return accumulator;
+  }, {});
+  const uniqueHsCodes = new Set(rows.map((row) => row.hs_code || "Unknown"));
+  const largestExposureRow = rows.reduce((currentMax, row) => {
+    if (!currentMax) {
+      return row;
+    }
+    return Number(row.exposure) > Number(currentMax.exposure) ? row : currentMax;
+  }, null);
+  const busiestTransition = Object.entries(transitionCounts).sort((left, right) => right[1] - left[1])[0];
+  const classOrder = usesAbg ? ["A", "B", "G", "NN"] : ["PP", "PN", "NP"];
+  const classSummary = classOrder
+    .filter((label) => classCounts[label])
+    .map((label) => `${label} ${classCounts[label]}`)
+    .join(" | ");
+  const boundSummary = ["Lower", "Upper", "Interior"]
+    .filter((label) => boundCounts[label])
+    .map((label) => `${label} ${boundCounts[label]}`)
+    .join(" | ");
+  const introText = usesAbg
+    ? "First Optimization exposes the synchronized coefficient output directly. Summary cards stay visible above the scrollable HS tables so the overall picture is readable before drilling down."
+    : "First Optimization keeps producer-linked coefficients grouped by stage first and then by HS code. The overview cards summarize the active coefficient footprint before the detailed tables.";
+  const summaryItems = [
+    { label: "Coefficient Rows", value: rows.length, note: "All coefficient rows visible for the current selection." },
+    { label: "Stage Groups", value: Object.keys(transitionCounts).length, note: busiestTransition ? `${busiestTransition[0]} is the largest group with ${busiestTransition[1]} rows.` : "" },
+    { label: "HS Codes", value: uniqueHsCodes.size, note: "Unique HS codes represented across all grouped coefficient tables." },
+    { label: "Class Mix", value: classSummary || "-", note: usesAbg ? "A / B / G / NN rows split by optimizer role." : "Producer-linked coefficient classes in this synchronized export." },
+    { label: "Bound Status Mix", value: boundSummary || "-", note: "Interior rows stay away from bounds; Lower and Upper rows sit on Cmin or Cmax." },
+    largestExposureRow
+      ? {
+          label: "Largest Exposure Row",
+          value: largestExposureRow.exposure,
+          note: `${largestExposureRow.transition_display || largestExposureRow.transition || "Transition"} | ${largestExposureRow.hs_code || "Unknown"} | ${largestExposureRow.producer_scope || "Unknown"} -> ${largestExposureRow.partner_scope || "Unknown"}`,
+        }
+      : null,
+  ].filter(Boolean);
+  const intro = usesAbg
+    ? `
+      <section class="producer-coefficient-intro">
+        <p>${escapeHtml(introText)}</p>
+        <div class="producer-summary-grid">
+          ${summaryItems.map((item) => buildFactTileHtml(item)).join("")}
+        </div>
+        <div class="producer-legend-grid">
+          <article class="producer-legend-item">
+            <strong>A</strong>
+            <span>Edge-level coefficient on a source-country to target-country trade row.</span>
+          </article>
+          <article class="producer-legend-item">
+            <strong>B</strong>
+            <span>Source-side balance coefficient tied to the exporting country for that HS code.</span>
+          </article>
+          <article class="producer-legend-item">
+            <strong>G</strong>
+            <span>Target-side balance coefficient tied to the importing country for that HS code.</span>
+          </article>
+          <article class="producer-legend-item">
+            <strong>NN</strong>
+            <span>Exporter-level coefficient for target-country exporters sending this HS code onward to non-target destinations.</span>
+          </article>
+          <article class="producer-legend-item">
+            <strong>Exposure</strong>
+            <span>The raw trade quantity attached to that coefficient row in the selected case.</span>
+          </article>
+          <article class="producer-legend-item">
+            <strong>Exposure Share</strong>
+            <span>The row exposure divided by the total raw trade quantity for that stage-triplet and HS code.</span>
+          </article>
+        </div>
+      </section>
+    `
+    : `
+      <section class="producer-coefficient-intro">
+        <p>${escapeHtml(introText)}</p>
+        <div class="producer-summary-grid">
+          ${summaryItems.map((item) => buildFactTileHtml(item)).join("")}
+        </div>
+        <div class="producer-legend-grid">
+          <article class="producer-legend-item">
+            <strong>PP</strong>
+            <span>Producer -> Producer. A pair-specific coefficient for a source producer shipping to a target producer.</span>
+          </article>
+          <article class="producer-legend-item">
+            <strong>PN</strong>
+            <span>Producer -> Non-producer. One shared coefficient for a source producer shipping this HS code to all non-target producers.</span>
+          </article>
+          <article class="producer-legend-item">
+            <strong>NP</strong>
+            <span>Non-producer -> Producer. One shared coefficient for a target producer receiving this HS code from all non-source exporters.</span>
+          </article>
+          <article class="producer-legend-item">
+            <strong>Exposure</strong>
+            <span>The raw import volume governed by that coefficient in the selected year.</span>
+          </article>
+          <article class="producer-legend-item">
+            <strong>Exposure Share</strong>
+            <span>The coefficient exposure divided by the total raw trade volume of that transition-HS series in the selected year.</span>
+          </article>
+        </div>
+      </section>
+    `;
 
   const stageGroups = new Map();
   rows.forEach((row) => {
@@ -1079,7 +1566,7 @@ function buildProducerCoefficientSectionsHtml(rows) {
         <section class="transition-group producer-coefficient-group">
           <div class="transition-group-head">
             <strong>${escapeHtml(transition)}</strong>
-            <span>${escapeHtml(`${hsGroups.size} HS code${hsGroups.size === 1 ? "" : "s"} | ${rowCount} producer-linked coefficient row${rowCount === 1 ? "" : "s"}`)}</span>
+            <span>${escapeHtml(`${hsGroups.size} HS code${hsGroups.size === 1 ? "" : "s"} | ${rowCount} coefficient row${rowCount === 1 ? "" : "s"}`)}</span>
           </div>
           <div class="producer-subtable-grid">
             ${hsTables}
@@ -1094,31 +1581,13 @@ function buildProducerCoefficientSectionsHtml(rows) {
 
 function buildTransitionCardsHtml(rows) {
   if (!rows || !rows.length) {
-    return `<div class="order-empty">No per-HS diagnostics are available for the current selection.</div>`;
+    return `<div class="order-empty">No stage diagnostics are available for the current selection.</div>`;
   }
-  const groups = new Map();
-  rows.forEach((row) => {
-    const key = row.transition_display || row.transition || "Transition";
-    if (!groups.has(key)) {
-      groups.set(key, []);
-    }
-    groups.get(key).push(row);
-  });
-  return Array.from(groups.entries())
-    .map(
-      ([transition, groupRows]) => `
-        <section class="transition-group">
-          <div class="transition-group-head">
-            <strong>${escapeHtml(transition)}</strong>
-            <span>${escapeHtml(`${groupRows.length} HS folder${groupRows.length === 1 ? "" : "s"}`)}</span>
-          </div>
-          <div class="transition-card-grid">
-            ${groupRows.map((row) => buildTransitionCardHtml(row)).join("")}
-          </div>
-        </section>
-      `,
-    )
-    .join("");
+  return `
+    <div class="transition-stage-grid">
+      ${rows.map((row) => buildTransitionCardHtml(row)).join("")}
+    </div>
+  `;
 }
 
 function renderTables(tables) {
@@ -1132,20 +1601,30 @@ function renderTables(tables) {
   const parameterRows = tables.parameters || [];
   const producerCoefficientRows = tables.producerCoefficients || [];
   document.getElementById("metrics-table").innerHTML =
-    metricRows.length && Object.prototype.hasOwnProperty.call(metricRows[0], "baseline")
-      ? buildMetricsTableHtml(metricRows)
-      : buildTableHtml(metricRows);
+    metricRows.length && (Object.prototype.hasOwnProperty.call(metricRows[0], "Metric") || Object.prototype.hasOwnProperty.call(metricRows[0], "metric"))
+      ? buildMetricSnapshotHtml(metricRows)
+      : metricRows.length && Object.prototype.hasOwnProperty.call(metricRows[0], "baseline")
+        ? buildCompareMetricsTableHtml(metricRows)
+        : buildTableHtml(metricRows);
   document.getElementById("stage-table").innerHTML =
-    stageRows.length && Object.prototype.hasOwnProperty.call(stageRows[0], "baseline_unknown")
-      ? buildStageTableHtml(stageRows)
-      : buildTableHtml(stageRows);
+    stageRows.length && (Object.prototype.hasOwnProperty.call(stageRows[0], "Stage Group") || Object.prototype.hasOwnProperty.call(stageRows[0], "stage"))
+      ? buildStageOutcomeCardsHtml(stageRows)
+      : stageRows.length && Object.prototype.hasOwnProperty.call(stageRows[0], "baseline_unknown")
+        ? buildCompareStageTableHtml(stageRows)
+        : buildTableHtml(stageRows);
   document.getElementById("parameter-table").innerHTML =
-    parameterRows.length && Object.prototype.hasOwnProperty.call(parameterRows[0], "baseline")
-      ? buildParameterTableHtml(parameterRows)
-      : buildTableHtml(parameterRows);
+    parameterRows.length && (Object.prototype.hasOwnProperty.call(parameterRows[0], "Parameter") || Object.prototype.hasOwnProperty.call(parameterRows[0], "parameter"))
+      ? buildParameterOverviewHtml(parameterRows)
+      : parameterRows.length && Object.prototype.hasOwnProperty.call(parameterRows[0], "baseline")
+        ? buildCompareParameterTableHtml(parameterRows)
+        : buildTableHtml(parameterRows);
   document.getElementById("producer-coefficient-table").innerHTML = buildProducerCoefficientSectionsHtml(producerCoefficientRows);
   document.getElementById("transition-table").innerHTML = buildTransitionCardsHtml(tables.transitions);
-  document.getElementById("transition-note").textContent = tables.transitionNote || "";
+  document.getElementById("transition-note").textContent =
+    tables.transitionNote ||
+    (tables.transitions?.length
+      ? "Stage diagnostics summarize each synchronized stage triplet without forcing the overview into wide tables."
+      : "Stage diagnostics are only populated when First Optimization exposes synchronized optimizer outputs.");
 }
 
 async function bootstrap() {
@@ -1159,7 +1638,7 @@ async function bootstrap() {
   state.metal = payload.metadata.defaultMetal;
   state.theme = payload.metadata.defaultTheme;
   state.years = payload.metadata.years;
-  state.resultModes = payload.metadata.resultModes || ["baseline", "optimized_v3", "optimized_v4"];
+  state.resultModes = payload.metadata.resultModes || ["baseline", "first_optimization"];
   state.resultLabels = payload.metadata.resultLabels || {};
   state.tableViews = payload.metadata.tableViews || ["auto", "baseline", "optimized", "compare"];
   state.tableViewLabels = payload.metadata.tableViewLabels || {};
@@ -1230,8 +1709,7 @@ async function bootstrap() {
     try {
       await unlockAnalystMode();
     } catch (error) {
-      setStatus("Access denied", "warn");
-      document.getElementById("notes-list").innerHTML = `<div class="note-item">${escapeHtml(error.message)}</div>`;
+      showUiError(error.message, "Access denied");
     }
   });
   document.getElementById("access-password-input").addEventListener("keydown", async (event) => {
@@ -1242,8 +1720,7 @@ async function bootstrap() {
     try {
       await unlockAnalystMode();
     } catch (error) {
-      setStatus("Access denied", "warn");
-      document.getElementById("notes-list").innerHTML = `<div class="note-item">${escapeHtml(error.message)}</div>`;
+      showUiError(error.message, "Access denied");
     }
   });
   await loadFigure();
@@ -1267,6 +1744,5 @@ function renderResultButtons() {
 
 bootstrap().catch((error) => {
   console.error(error);
-  setStatus("Error", "warn");
-  document.getElementById("notes-list").innerHTML = `<div class="note-item">${escapeHtml(error.message)}</div>`;
+  showUiError(error.message);
 });

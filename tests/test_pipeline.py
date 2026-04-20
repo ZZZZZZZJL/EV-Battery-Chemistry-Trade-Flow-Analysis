@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from trade_flow_opt.pipeline_v1 import (
+from trade_flow.baseline import (
     HyperParameters,
     TransitionContext,
     apply_reexport,

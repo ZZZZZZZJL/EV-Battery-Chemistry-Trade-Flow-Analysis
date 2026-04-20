@@ -15,6 +15,7 @@ dependencies = [
   "openpyxl",
   "pandas",
   "plotly",
+  "scipy",
   "uvicorn",
 ]
 

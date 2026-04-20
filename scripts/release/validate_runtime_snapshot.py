@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import sys
 
 from trade_flow.runtime.runtime_checks import gather_runtime_status
 

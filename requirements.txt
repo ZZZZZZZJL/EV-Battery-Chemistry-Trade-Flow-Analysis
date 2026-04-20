@@ -4,4 +4,5 @@ numpy
 openpyxl
 pandas
 plotly
+scipy
 uvicorn

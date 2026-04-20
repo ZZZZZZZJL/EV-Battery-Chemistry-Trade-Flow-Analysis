@@ -93,6 +93,8 @@ REFERENCE_TEXT_BY_THEME = {
     "dark": "#1a140f",
     "light": "#1a140f",
 }
+BODY_FONT_FAMILY = "Aptos, Segoe UI, sans-serif"
+DISPLAY_FONT_FAMILY = "Georgia, Times New Roman, serif"
 
 
 @dataclass(frozen=True)
@@ -310,6 +312,10 @@ def _aggregate_links(links: list[LinkSpec], epsilon: float) -> list[LinkSpec]:
         for (source, target, color), value in buckets.items()
         if value > epsilon
     ]
+
+
+def _plotly_safe_token(value: str) -> str:
+    return "".join(character if character.isalnum() else "-" for character in str(value))
 
 
 def _node_values(nodes: dict[str, NodeSpec], links: list[LinkSpec]) -> dict[str, float]:
@@ -778,6 +784,8 @@ def _build_figure(
 
     figure = go.Figure(
         go.Sankey(
+            ids=[_plotly_safe_token(key) for key in ordered_keys],
+            uid=_plotly_safe_token(f"{metal}-{view_mode}"),
             arrangement="fixed",
             domain={"x": [0.0, 1.0], "y": [plot_domain_top, plot_domain_bottom]},
             node={
@@ -800,7 +808,7 @@ def _build_figure(
         )
     )
     figure.update_layout(
-        font={"color": BODY_TEXT_BY_THEME[theme], "family": "Aptos, Segoe UI, sans-serif", "size": 12},
+        font={"color": BODY_TEXT_BY_THEME[theme], "family": BODY_FONT_FAMILY, "size": 12},
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         margin={"l": 6, "r": 6, "t": 8, "b": 16},
@@ -818,7 +826,7 @@ def _build_figure(
                     "yanchor": "middle",
                     "align": "center",
                     "font": {
-                        "family": "Georgia, Times New Roman, serif",
+                        "family": DISPLAY_FONT_FAMILY,
                         "size": 12,
                         "color": TITLE_TEXT_BY_THEME[theme],
                     },
@@ -836,7 +844,7 @@ def _build_figure(
                 "yanchor": "middle",
                 "align": "right",
                 "font": {
-                    "family": "Aptos, Segoe UI, sans-serif",
+                    "family": BODY_FONT_FAMILY,
                     "size": 12,
                     "color": REFERENCE_TEXT_BY_THEME[theme],
                 },

@@ -10,14 +10,14 @@ import pandas as pd
 
 from battery_7step_site.config import get_battery_site_config
 from battery_7step_site.services.datasets import load_dataset_config
+from battery_7step_site.services.first_optimization_tables import FirstOptimizationTableSource
 from battery_7step_site.services.reference import load_reference_frame
 
 
-SCENARIOS = ("baseline", "optimized_v3", "optimized_v4")
+SCENARIOS = ("baseline", "first_optimization")
 SCENARIO_LABELS = {
     "baseline": "Original",
-    "optimized_v3": "First Optimization",
-    "optimized_v4": "Second Optimization",
+    "first_optimization": "First Optimization",
 }
 TABLE_VIEWS = ("auto", "baseline", "optimized", "compare")
 TABLE_VIEW_LABELS = {
@@ -44,8 +44,7 @@ CASE_FILE_MAP = {
 }
 SCENARIO_CASE_KIND = {
     "baseline": "baseline",
-    "optimized_v3": "optimized",
-    "optimized_v4": "optimized",
+    "first_optimization": "optimized",
 }
 METRIC_ORDER = [
     ("unknown_total", "Unknown Total"),
@@ -298,8 +297,9 @@ def _comparison_from_rows(baseline: dict[str, Any], optimized: dict[str, Any]) -
 class OutputRepository:
     """Read-only access layer for precomputed baseline / optimized outputs."""
 
-    output_dir: Path
-    comparison_dir: Path
+    original_data_root: Path
+    first_optimization_data_root: Path
+    first_optimization_diagnostics_root: Path
     version_output_root: Path
 
     def __post_init__(self) -> None:
@@ -308,15 +308,14 @@ class OutputRepository:
         self._transition_frame_cache: dict[tuple[str, str], pd.DataFrame] = {}
         self._coefficient_frame_cache: dict[tuple[str, str], pd.DataFrame] = {}
         self.scenario_output_dirs = {
-            "baseline": self.output_dir,
-            "optimized_v3": self._resolve_output_dir("v3"),
-            "optimized_v4": self._resolve_output_dir("v4"),
+            "baseline": self.original_data_root,
+            "first_optimization": self.first_optimization_data_root,
         }
         self.scenario_comparison_dirs = {
-            "baseline": self._resolve_output_dir("v4") / "comparison",
-            "optimized_v3": self._resolve_output_dir("v3") / "comparison",
-            "optimized_v4": self._resolve_output_dir("v4") / "comparison",
+            "baseline": self.original_data_root / "comparison",
+            "first_optimization": self.first_optimization_data_root / "comparison",
         }
+        self.comparison_dir = self.scenario_comparison_dirs["first_optimization"]
         self.summary_frames = {
             scenario: pd.read_csv(
                 self.scenario_comparison_dirs[scenario]
@@ -332,19 +331,22 @@ class OutputRepository:
             for scenario in SCENARIOS
         }
         self.comparison_frames = {
-            "optimized_v3": pd.read_csv(self.scenario_comparison_dirs["optimized_v3"] / "comparison_summary.csv"),
-            "optimized_v4": pd.read_csv(self.scenario_comparison_dirs["optimized_v4"] / "comparison_summary.csv"),
+            "first_optimization": pd.read_csv(self.scenario_comparison_dirs["first_optimization"] / "comparison_summary.csv"),
         }
+        transition_detail_path = self.scenario_comparison_dirs["first_optimization"] / "optimized_transition_detail.csv"
         self.transition_frames = {
-            "optimized_v3": pd.read_csv(self.scenario_comparison_dirs["optimized_v3"] / "optimized_transition_detail.csv").fillna(""),
-            "optimized_v4": pd.read_csv(self.scenario_comparison_dirs["optimized_v4"] / "optimized_transition_detail.csv").fillna(""),
+            "first_optimization": pd.read_csv(transition_detail_path).fillna("") if transition_detail_path.exists() else pd.DataFrame(),
         }
         self.feasibility_by_scenario = {}
-        for scenario in ("optimized_v3", "optimized_v4"):
-            with (self.scenario_comparison_dirs[scenario] / "feasibility_summary.json").open("r", encoding="utf-8") as handle:
-                self.feasibility_by_scenario[scenario] = json.load(handle)
+        for scenario in ("first_optimization",):
+            feasibility_path = self.scenario_comparison_dirs[scenario] / "feasibility_summary.json"
+            if feasibility_path.exists():
+                with feasibility_path.open("r", encoding="utf-8") as handle:
+                    self.feasibility_by_scenario[scenario] = json.load(handle)
+            else:
+                self.feasibility_by_scenario[scenario] = {"best_params_by_metal": {}}
         self.cobalt_mode_results: dict[str, dict[str, Any]] = {}
-        for scenario in ("optimized_v3", "optimized_v4"):
+        for scenario in ("first_optimization",):
             results_path = self.scenario_comparison_dirs[scenario] / "cobalt_mode_results.json"
             if results_path.exists():
                 with results_path.open("r", encoding="utf-8") as handle:
@@ -363,6 +365,10 @@ class OutputRepository:
                 }
         except Exception:
             self.country_name_by_id = {}
+        self.first_optimization_tables = FirstOptimizationTableSource(
+            self.first_optimization_diagnostics_root,
+            self.country_name_by_id,
+        )
 
         preferred_order = ["Ni", "Li", "Co"]
         available = {str(value) for value in self.summary_frames["baseline"]["metal"].unique().tolist()}
@@ -371,7 +377,7 @@ class OutputRepository:
 
     def _resolve_output_dir(self, version_key: str) -> Path:
         candidate = self.version_output_root / version_key / "output"
-        return candidate if candidate.exists() else self.output_dir
+        return candidate if candidate.exists() else self.first_optimization_data_root
 
     def case_dir(self, metal: str, year: int, scenario: str) -> Path:
         case_kind = SCENARIO_CASE_KIND[scenario]
@@ -412,6 +418,8 @@ class OutputRepository:
         return _stage_rows_from_nodes(nodes)
 
     def get_comparison_row(self, metal: str, year: int, scenario: str, cobalt_mode: str = "mid") -> dict[str, Any]:
+        if scenario == "first_optimization" and self.first_optimization_tables.available:
+            return self.first_optimization_tables.comparison_row(metal, year)
         baseline = self.get_summary_row(metal, year, "baseline", cobalt_mode)
         optimized = self.get_summary_row(metal, year, scenario, cobalt_mode)
         return _comparison_from_rows(baseline, optimized)
@@ -431,16 +439,25 @@ class OutputRepository:
         cache_key = (scenario, cobalt_mode)
         if cache_key in self._coefficient_frame_cache:
             return self._coefficient_frame_cache[cache_key]
-        filename = "v3_coefficients.csv" if scenario == "optimized_v3" else "v4_coefficients.csv"
-        path = _first_existing_path(
-            _intermediate_file_candidates(self.scenario_output_dirs[scenario] / "intermediate", filename, metal, cobalt_mode)
+        intermediate_dir = self.scenario_output_dirs[scenario] / "intermediate"
+        preferred_candidates = _intermediate_file_candidates(
+            intermediate_dir,
+            "first_optimization_coefficients.csv",
+            metal,
+            cobalt_mode,
         )
+        path = next((candidate for candidate in preferred_candidates if candidate.exists()), None)
+        if path is None:
+            wildcard_candidates = sorted(intermediate_dir.glob("*coefficients*.csv"))
+            path = wildcard_candidates[0] if wildcard_candidates else preferred_candidates[0]
         frame = pd.read_csv(path).fillna("") if path.exists() else pd.DataFrame()
         self._coefficient_frame_cache[cache_key] = frame
         return frame
 
     def get_transition_rows(self, metal: str, year: int, scenario: str, cobalt_mode: str = "mid") -> list[dict[str, Any]]:
-        if scenario not in ("optimized_v3", "optimized_v4"):
+        if scenario == "first_optimization" and self.first_optimization_tables.available:
+            return self.first_optimization_tables.transition_rows(metal, year)
+        if scenario != "first_optimization":
             return []
         frame = self._load_transition_frame(scenario, metal, cobalt_mode)
         rows = frame[(frame["metal"] == metal) & (frame["year"] == year)].copy()
@@ -468,8 +485,8 @@ class OutputRepository:
                 {"label": PARAMETER_LABELS.get(key, key), "value": value}
                 for key, value in _ordered_param_items(params)
             ]
-            diagnostic_version = "v4" if scenario == "optimized_v4" else ("v3" if scenario == "optimized_v3" else "legacy")
-            is_advanced = scenario in ("optimized_v3", "optimized_v4") or bool(coefficient_summary)
+            diagnostic_version = "first_optimization" if scenario == "first_optimization" else "baseline"
+            is_advanced = scenario == "first_optimization" or bool(coefficient_summary)
             signal_source = coefficient_summary if is_advanced and coefficient_summary else multipliers
             has_signal = bool(signal_source) or stage_unknown > 0.0 or non_source > 0.0 or non_target > 0.0 or abs(flow_delta) > 1e-9
 
@@ -598,7 +615,7 @@ class OutputRepository:
             decoded.append(
                 {
                     **record,
-                    "diagnostic_kind": diagnostic_version if is_advanced else "legacy",
+                    "diagnostic_kind": diagnostic_version if is_advanced else "baseline",
                     "transition_display": TRANSITION_LABELS.get(str(record.get("transition", "")), str(record.get("transition", ""))),
                     "folder_group": folder_group,
                     "folder_display": folder_display,
@@ -627,6 +644,10 @@ class OutputRepository:
 
 
     def get_producer_coefficient_rows(self, metal: str, year: int, scenario: str, cobalt_mode: str = "mid") -> list[dict[str, Any]]:
+        if scenario == "baseline":
+            return []
+        if scenario == "first_optimization" and self.first_optimization_tables.available:
+            return self.first_optimization_tables.producer_coefficient_rows(metal, year)
         frame = self._load_coefficient_frame(scenario, metal, cobalt_mode)
         if frame.empty:
             return []
@@ -690,6 +711,8 @@ class OutputRepository:
         return decoded
 
     def build_metric_rows(self, metal: str, year: int, scenario: str, table_view: str, cobalt_mode: str = "mid") -> list[dict[str, Any]]:
+        if scenario == "first_optimization" and self.first_optimization_tables.available:
+            return self.first_optimization_tables.metric_rows(metal, year)
         if table_view == "compare" and scenario != "baseline":
             comparison = self.get_comparison_row(metal, year, scenario, cobalt_mode)
             rows: list[dict[str, Any]] = []
@@ -718,6 +741,8 @@ class OutputRepository:
         return [{"metric": label, "value": summary[key]} for key, label in METRIC_ORDER]
 
     def build_stage_rows(self, metal: str, year: int, scenario: str, table_view: str, cobalt_mode: str = "mid") -> list[dict[str, Any]]:
+        if scenario == "first_optimization" and self.first_optimization_tables.available:
+            return self.first_optimization_tables.stage_rows(metal, year)
         if table_view == "compare" and scenario != "baseline":
             baseline_rows = {row["stage"]: row for row in self.get_stage_rows(metal, year, "baseline", cobalt_mode)}
             optimized_rows = {row["stage"]: row for row in self.get_stage_rows(metal, year, scenario, cobalt_mode)}
@@ -739,7 +764,16 @@ class OutputRepository:
 
         return self.get_stage_rows(metal, year, scenario, cobalt_mode)
 
-    def build_parameter_rows(self, metal: str, scenario: str, table_view: str, cobalt_mode: str = "mid") -> list[dict[str, Any]]:
+    def build_parameter_rows(
+        self,
+        metal: str,
+        scenario: str,
+        table_view: str,
+        cobalt_mode: str = "mid",
+        year: int | None = None,
+    ) -> list[dict[str, Any]]:
+        if scenario == "first_optimization" and self.first_optimization_tables.available:
+            return self.first_optimization_tables.parameter_rows(metal, year)
         if table_view == "compare" and scenario != "baseline":
             best = self.get_best_params(metal, scenario, cobalt_mode)
             params = best.get("best_params", {})
@@ -784,19 +818,18 @@ class OutputRepository:
         del table_view
         notes = [
             f"Display result: {SCENARIO_LABELS.get(scenario, scenario)}.",
-            "The website reads precomputed node / link / summary files directly from frozen output snapshots.",
+            "The website reads precomputed node / link / summary files directly from the current runtime data layout under data/.",
             "No sankey_algo-style recomputation is triggered when you refresh the view.",
-            "Diagnostics compare Original against the selected optimization version when an optimized result is active; per-HS diagnostics only appear for transitions with real HS-code folders.",
+            "Diagnostics stay hidden in guest mode and switch to stage-level optimization summaries in non-guest mode.",
         ]
         if metal == "Co":
             notes.append(f"Cobalt scenario: {str(cobalt_mode or 'mid').capitalize()}.")
-        if scenario == "optimized_v3":
+        if scenario == "first_optimization":
             notes.append(
-                "First Optimization diagnostics are import-only and HS-specific: PP / PN / NP coefficients are shown directly, while synthetic no-HS transitions stay at the baseline and are omitted."
+                "First Optimization is synchronized from the latest conversion_factor_optimization output into the published runtime snapshot before the Sankey is rendered."
             )
-        if scenario == "optimized_v4":
             notes.append(
-                "Second Optimization keeps the import-only HS structure, but adds PP-prioritized budget allocation and separate Unknown Source / Destination weighting in the objective."
+                "Overview, stage outcomes, stage diagnostics, source-scaling rows, and coefficient tables summarize factor_A / factor_B / factor_G / factor_NN outputs without changing the rest of the site workflow."
             )
         if scenario != "baseline":
             best = self.get_best_params(metal, scenario, cobalt_mode)
@@ -804,15 +837,32 @@ class OutputRepository:
                 f"{metal} {SCENARIO_LABELS.get(scenario, scenario)} improved {best.get('cases_improved', 0)} of {best.get('case_count', 0)} yearly cases."
             )
         else:
-            notes.append("Original mode mirrors the exported 2.1-compatible result before optimization adjustments.")
+            notes.append("Original mode mirrors the current exported baseline result before optimization adjustments.")
         return notes
 
 
 @lru_cache(maxsize=1)
 def get_repository() -> OutputRepository:
     config = get_battery_site_config()
+    local_output_root = config.root_dir / "output"
+    original_data_root = (
+        config.original_data_root
+        if (config.original_data_root / "baseline").exists()
+        else local_output_root
+    )
+    first_optimization_data_root = (
+        config.first_optimization_data_root
+        if (config.first_optimization_data_root / "optimized").exists()
+        else local_output_root
+    )
+    first_optimization_diagnostics_root = (
+        config.first_optimization_diagnostics_root
+        if config.first_optimization_diagnostics_root.exists()
+        else config.instance_dir / "conversion_factor_optimization" / "output"
+    )
     return OutputRepository(
-        output_dir=config.output_dir,
-        comparison_dir=config.output_dir / "comparison",
+        original_data_root=original_data_root,
+        first_optimization_data_root=first_optimization_data_root,
+        first_optimization_diagnostics_root=first_optimization_diagnostics_root,
         version_output_root=config.output_versions_root,
     )

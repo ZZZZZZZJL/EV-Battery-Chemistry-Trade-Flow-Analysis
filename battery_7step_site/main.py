@@ -7,6 +7,7 @@ from fastapi.templating import Jinja2Templates
 
 from battery_7step_site.api.routes import router
 from battery_7step_site.config import get_battery_site_config
+from battery_7step_site.services.precomputed_site import warm_default_payload_cache
 from battery_7step_site.services.runtime_checks import RuntimeStatus, gather_runtime_status
 
 
@@ -31,6 +32,8 @@ def startup_runtime_validation() -> None:
     app.state.runtime_status = status
     if site_config.strict_startup and not status.ready:
         raise RuntimeError("; ".join(status.errors))
+    if status.ready:
+        app.state.default_payload_cache = warm_default_payload_cache()
 
 
 @app.get("/", response_class=HTMLResponse)

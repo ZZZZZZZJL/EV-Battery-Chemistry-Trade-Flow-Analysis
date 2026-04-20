@@ -4,6 +4,6 @@ services:
     runtime: python
     plan: starter
     buildCommand: pip install -e .
-    startCommand: uvicorn --app-dir . battery_7step_site.main:app --host 0.0.0.0 --port $PORT
+    startCommand: uvicorn --app-dir . apps.web.app:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /healthz
     autoDeploy: true
