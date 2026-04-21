@@ -1,5 +1,6 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
+from pathlib import Path
 import unittest
 
 from trade_flow.baseline import (
@@ -14,8 +15,14 @@ from trade_flow.baseline import (
 )
 
 
+ROOT = Path(__file__).resolve().parents[1]
+
+
 class PipelineTests(unittest.TestCase):
     def test_external_baseline_builds(self):
+        mining_workbook = ROOT / "data" / "shared" / "production" / "country" / "Lithium_Mining_Final.xlsx"
+        if not mining_workbook.exists() or mining_workbook.stat().st_size == 0:
+            self.skipTest("Public repo does not currently ship non-empty lithium workbook fixtures.")
         inputs = load_year_inputs("Li", 2024)
         nodes, links = build_country_graph("Li", 2024, inputs=inputs)
         self.assertTrue(nodes)

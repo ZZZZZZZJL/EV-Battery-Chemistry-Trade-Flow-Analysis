@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from pathlib import Path
@@ -6,8 +6,8 @@ from typing import Any
 
 import pandas as pd
 
-from battery_7step_site.services.cobalt_data import CobaltYearInputs
-from battery_7step_site.services.lithium_data import LithiumYearInputs
+from trade_flow.legacy_site.services.cobalt_data import CobaltYearInputs
+from trade_flow.legacy_site.services.lithium_data import LithiumYearInputs
 from trade_flow.baseline import pipeline_v1
 
 
@@ -329,3 +329,4 @@ __all__ = [
     "load_case_inputs_from_json",
     "refresh_li_co_precomputed_from_inputs",
 ]
+

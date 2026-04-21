@@ -1,9 +1,5 @@
-"""Canonical ASGI entrypoint for the web product.
+"""Canonical ASGI entrypoint for the unified trade_flow web product."""
 
-The existing battery_7step_site package remains available as a compatibility
-layer while the repository transitions to the monorepo layout.
-"""
-
-from battery_7step_site.main import app
+from trade_flow.web.main import app
 
 __all__ = ["app"]

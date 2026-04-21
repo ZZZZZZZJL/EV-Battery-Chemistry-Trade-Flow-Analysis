@@ -137,16 +137,16 @@ HYPERPARAM_GRID = (
 def _modules() -> dict[str, dict[str, Any]]:
     return {
         "Li": {
-            "data": importlib.import_module("battery_7step_site.services.lithium_data"),
-            "sankey": importlib.import_module("battery_7step_site.services.lithium_sankey"),
+            "data": importlib.import_module("trade_flow.legacy_site.services.lithium_data"),
+            "sankey": importlib.import_module("trade_flow.legacy_site.services.lithium_sankey"),
         },
         "Ni": {
-            "data": importlib.import_module("battery_7step_site.services.nickel_data"),
-            "sankey": importlib.import_module("battery_7step_site.services.nickel_sankey"),
+            "data": importlib.import_module("trade_flow.legacy_site.services.nickel_data"),
+            "sankey": importlib.import_module("trade_flow.legacy_site.services.nickel_sankey"),
         },
         "Co": {
-            "data": importlib.import_module("battery_7step_site.services.cobalt_data"),
-            "sankey": importlib.import_module("battery_7step_site.services.cobalt_sankey"),
+            "data": importlib.import_module("trade_flow.legacy_site.services.cobalt_data"),
+            "sankey": importlib.import_module("trade_flow.legacy_site.services.cobalt_sankey"),
         },
     }
 
@@ -925,4 +925,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 

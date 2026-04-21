@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import importlib
 import json
@@ -204,8 +204,8 @@ def _bootstrap_project_imports(project_root: Path) -> dict[str, Any]:
     return {
         "pipeline_v1": baseline_core,
         "role_config": role_config,
-        "datasets": importlib.import_module("battery_7step_site.services.datasets"),
-        "reference": importlib.import_module("battery_7step_site.services.reference"),
+        "datasets": importlib.import_module("trade_flow.legacy_site.services.datasets"),
+        "reference": importlib.import_module("trade_flow.legacy_site.services.reference"),
     }
 
 
@@ -1305,3 +1305,4 @@ def run_conversion_factor_optimization(
         special_case_df=special_case_df,
         notes_df=notes_df,
     )
+
