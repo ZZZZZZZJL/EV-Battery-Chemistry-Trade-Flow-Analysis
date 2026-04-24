@@ -94,10 +94,9 @@ def _safe_float(value: Any) -> float:
 
 def _load_factor_tables(case_dir: Path) -> dict[str, dict[Any, float]]:
     factor_specs = {
-        "A": ("factor_A.csv", ("folder_name", "source_country_id", "target_country_id"), "optimized_A_ij"),
-        "B": ("factor_B.csv", ("folder_name", "source_country_id"), "optimized_B_i"),
-        "G": ("factor_G.csv", ("folder_name", "target_country_id"), "optimized_G_j"),
-        "NN": ("factor_NN.csv", ("folder_name", "source_country_id"), "optimized_NN_i"),
+        "c_pp": ("factor_c_pp.csv", ("folder_name", "source_country_id", "target_country_id"), "optimized_c_pp"),
+        "c_pn": ("factor_c_pn.csv", ("folder_name", "source_country_id"), "optimized_c_pn"),
+        "c_np": ("factor_c_np.csv", ("folder_name", "target_country_id"), "optimized_c_np"),
     }
     tables: dict[str, dict[Any, float]] = {}
     for factor_name, (filename, key_columns, value_column) in factor_specs.items():
@@ -129,10 +128,9 @@ def _build_folder_flow_map(
 ) -> dict[tuple[int, int], float]:
     raw_map = optimizer_module._load_raw_import_map(raw_import_root, year, hs_code)
     flow_map: dict[tuple[int, int], float] = {}
-    a_lookup = factor_tables["A"]
-    b_lookup = factor_tables["B"]
-    g_lookup = factor_tables["G"]
-    nn_lookup = factor_tables["NN"]
+    c_pp_lookup = factor_tables["c_pp"]
+    c_pn_lookup = factor_tables["c_pn"]
+    c_np_lookup = factor_tables["c_np"]
 
     for (exporter, importer), quantity in raw_map.items():
         if quantity <= EPSILON:
@@ -140,13 +138,11 @@ def _build_folder_flow_map(
         edge = (int(exporter), int(importer))
         coefficient = None
         if exporter in source_countries and importer in target_countries:
-            coefficient = a_lookup.get((folder_name, int(exporter), int(importer)), recommended_factor)
+            coefficient = c_pp_lookup.get((folder_name, int(exporter), int(importer)), recommended_factor)
         elif exporter in source_countries and importer not in target_countries:
-            coefficient = b_lookup.get((folder_name, int(exporter)), recommended_factor)
+            coefficient = c_pn_lookup.get((folder_name, int(exporter)), recommended_factor)
         elif exporter not in source_countries and importer in target_countries:
-            coefficient = g_lookup.get((folder_name, int(importer)), recommended_factor)
-        elif exporter not in source_countries and exporter in target_countries and importer not in target_countries:
-            coefficient = nn_lookup.get((folder_name, int(exporter)), recommended_factor)
+            coefficient = c_np_lookup.get((folder_name, int(importer)), recommended_factor)
         if coefficient is None:
             continue
         adjusted_value = float(quantity) * float(coefficient)

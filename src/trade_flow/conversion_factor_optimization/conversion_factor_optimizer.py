@@ -26,7 +26,6 @@ class ObjectiveWeights:
     beta_pp: float = 0.02
     beta_pn: float = 0.01
     beta_np: float = 0.01
-    beta_nn: float = 0.001
 
 
 @dataclass(frozen=True)
@@ -54,7 +53,6 @@ class HSOptimizationCase:
     pn_totals: dict[int, float]
     np_edges: dict[tuple[int, int], float]
     np_totals: dict[int, float]
-    nn_totals: dict[int, float]
     ignored_other_total: float
     note: str
 
@@ -90,10 +88,9 @@ class OptimizationResult:
     summary_df: pd.DataFrame
     country_df: pd.DataFrame
     source_scale_df: pd.DataFrame
-    a_factor_df: pd.DataFrame
-    b_factor_df: pd.DataFrame
-    g_factor_df: pd.DataFrame
-    nn_factor_df: pd.DataFrame
+    c_pp_factor_df: pd.DataFrame
+    c_pn_factor_df: pd.DataFrame
+    c_np_factor_df: pd.DataFrame
     special_case_df: pd.DataFrame
     notes_df: pd.DataFrame
 
@@ -323,12 +320,11 @@ def _classify_raw_edges(
     raw_map: dict[tuple[int, int], float],
     source_countries: set[int],
     target_countries: set[int],
-) -> tuple[dict[tuple[int, int], float], dict[int, float], dict[tuple[int, int], float], dict[int, float], dict[int, float], float]:
+) -> tuple[dict[tuple[int, int], float], dict[int, float], dict[tuple[int, int], float], dict[int, float], float]:
     pp_edges: dict[tuple[int, int], float] = {}
     pn_totals: dict[int, float] = {}
     np_edges: dict[tuple[int, int], float] = {}
     np_totals: dict[int, float] = {}
-    nn_totals: dict[int, float] = {}
     ignored_other_total = 0.0
     for (exporter, importer), value in raw_map.items():
         if value <= EPSILON:
@@ -340,11 +336,9 @@ def _classify_raw_edges(
         elif exporter not in source_countries and importer in target_countries:
             np_edges[(int(exporter), int(importer))] = float(value)
             np_totals[int(importer)] = np_totals.get(int(importer), 0.0) + float(value)
-        elif exporter not in source_countries and exporter in target_countries and importer not in target_countries:
-            nn_totals[int(exporter)] = nn_totals.get(int(exporter), 0.0) + float(value)
         else:
             ignored_other_total += float(value)
-    return pp_edges, pn_totals, np_edges, np_totals, nn_totals, ignored_other_total
+    return pp_edges, pn_totals, np_edges, np_totals, ignored_other_total
 
 
 def _build_case(
@@ -398,7 +392,7 @@ def _build_case(
         source_countries = _nonzero_country_set(source_map)
         target_countries = _nonzero_country_set(target_map)
         raw_map = _load_raw_import_map(raw_import_root, year, hs_code)
-        pp_edges, pn_totals, np_edges, np_totals, nn_totals, ignored_other_total = _classify_raw_edges(
+        pp_edges, pn_totals, np_edges, np_totals, ignored_other_total = _classify_raw_edges(
             raw_map,
             source_countries,
             target_countries,
@@ -424,7 +418,6 @@ def _build_case(
                 pn_totals=pn_totals,
                 np_edges=np_edges,
                 np_totals=np_totals,
-                nn_totals=nn_totals,
                 ignored_other_total=ignored_other_total,
                 note=theoretical.note or role_spec.note,
             )
@@ -459,46 +452,38 @@ def _build_case(
 
 
 def _build_variable_order(case: OptimizationCase) -> dict[str, Any]:
-    a_keys: list[tuple[str, int, int]] = []
-    b_keys: list[tuple[str, int]] = []
-    g_keys: list[tuple[str, int]] = []
-    nn_keys: list[tuple[str, int]] = []
+    c_pp_keys: list[tuple[str, int, int]] = []
+    c_pn_keys: list[tuple[str, int]] = []
+    c_np_keys: list[tuple[str, int]] = []
     for hs_case in case.hs_cases:
-        a_keys.extend((hs_case.folder_name, exporter, importer) for exporter, importer in sorted(hs_case.pp_edges))
-        b_keys.extend((hs_case.folder_name, exporter) for exporter in sorted(hs_case.pn_totals))
-        g_keys.extend((hs_case.folder_name, importer) for importer in sorted(hs_case.np_totals))
-        nn_keys.extend((hs_case.folder_name, exporter) for exporter in sorted(hs_case.nn_totals))
+        c_pp_keys.extend((hs_case.folder_name, exporter, importer) for exporter, importer in sorted(hs_case.pp_edges))
+        c_pn_keys.extend((hs_case.folder_name, exporter) for exporter in sorted(hs_case.pn_totals))
+        c_np_keys.extend((hs_case.folder_name, importer) for importer in sorted(hs_case.np_totals))
 
-    a_index = {key: position for position, key in enumerate(a_keys)}
-    b_index = {key: position + len(a_keys) for position, key in enumerate(b_keys)}
-    g_index = {key: position + len(a_keys) + len(b_keys) for position, key in enumerate(g_keys)}
-    nn_index = {
-        key: position + len(a_keys) + len(b_keys) + len(g_keys)
-        for position, key in enumerate(nn_keys)
+    c_pp_index = {key: position for position, key in enumerate(c_pp_keys)}
+    c_pn_index = {key: position + len(c_pp_keys) for position, key in enumerate(c_pn_keys)}
+    c_np_index = {
+        key: position + len(c_pp_keys) + len(c_pn_keys)
+        for position, key in enumerate(c_np_keys)
     }
-    a_dev_offset = len(a_keys) + len(b_keys) + len(g_keys) + len(nn_keys)
-    b_dev_offset = a_dev_offset + len(a_keys)
-    g_dev_offset = b_dev_offset + len(b_keys)
-    nn_dev_offset = g_dev_offset + len(g_keys)
-    a_dev_index = {key: position + a_dev_offset for position, key in enumerate(a_keys)}
-    b_dev_index = {key: position + b_dev_offset for position, key in enumerate(b_keys)}
-    g_dev_index = {key: position + g_dev_offset for position, key in enumerate(g_keys)}
-    nn_dev_index = {key: position + nn_dev_offset for position, key in enumerate(nn_keys)}
-    u_in_offset = nn_dev_offset + len(nn_keys)
+    c_pp_dev_offset = len(c_pp_keys) + len(c_pn_keys) + len(c_np_keys)
+    c_pn_dev_offset = c_pp_dev_offset + len(c_pp_keys)
+    c_np_dev_offset = c_pn_dev_offset + len(c_pn_keys)
+    c_pp_dev_index = {key: position + c_pp_dev_offset for position, key in enumerate(c_pp_keys)}
+    c_pn_dev_index = {key: position + c_pn_dev_offset for position, key in enumerate(c_pn_keys)}
+    c_np_dev_index = {key: position + c_np_dev_offset for position, key in enumerate(c_np_keys)}
+    u_in_offset = c_np_dev_offset + len(c_np_keys)
     u_out_offset = u_in_offset + len(case.country_ids)
     return {
-        "a_keys": a_keys,
-        "b_keys": b_keys,
-        "g_keys": g_keys,
-        "nn_keys": nn_keys,
-        "a_index": a_index,
-        "b_index": b_index,
-        "g_index": g_index,
-        "nn_index": nn_index,
-        "a_dev_index": a_dev_index,
-        "b_dev_index": b_dev_index,
-        "g_dev_index": g_dev_index,
-        "nn_dev_index": nn_dev_index,
+        "c_pp_keys": c_pp_keys,
+        "c_pn_keys": c_pn_keys,
+        "c_np_keys": c_np_keys,
+        "c_pp_index": c_pp_index,
+        "c_pn_index": c_pn_index,
+        "c_np_index": c_np_index,
+        "c_pp_dev_index": c_pp_dev_index,
+        "c_pn_dev_index": c_pn_dev_index,
+        "c_np_dev_index": c_np_dev_index,
         "u_in_offset": u_in_offset,
         "u_out_offset": u_out_offset,
         "variable_count": u_out_offset + len(case.country_ids),
@@ -513,26 +498,21 @@ def _build_lp_problem(case: OptimizationCase, weights: ObjectiveWeights) -> tupl
     bounds: list[tuple[float | None, float | None]] = [(0.0, None)] * variable_count
     hs_lookup = {hs_case.folder_name: hs_case for hs_case in case.hs_cases}
 
-    for key in order["a_keys"]:
+    for key in order["c_pp_keys"]:
         hs_case = hs_lookup[key[0]]
-        index = order["a_index"][key]
+        index = order["c_pp_index"][key]
         bounds[index] = (hs_case.cmin, hs_case.cmax)
-        c[order["a_dev_index"][key]] = float(weights.beta_pp)
-    for key in order["b_keys"]:
+        c[order["c_pp_dev_index"][key]] = float(weights.beta_pp)
+    for key in order["c_pn_keys"]:
         hs_case = hs_lookup[key[0]]
-        index = order["b_index"][key]
+        index = order["c_pn_index"][key]
         bounds[index] = (hs_case.cmin, hs_case.cmax)
-        c[order["b_dev_index"][key]] = float(weights.beta_pn)
-    for key in order["g_keys"]:
+        c[order["c_pn_dev_index"][key]] = float(weights.beta_pn)
+    for key in order["c_np_keys"]:
         hs_case = hs_lookup[key[0]]
-        index = order["g_index"][key]
+        index = order["c_np_index"][key]
         bounds[index] = (hs_case.cmin, hs_case.cmax)
-        c[order["g_dev_index"][key]] = float(weights.beta_np)
-    for key in order["nn_keys"]:
-        hs_case = hs_lookup[key[0]]
-        index = order["nn_index"][key]
-        bounds[index] = (hs_case.cmin, hs_case.cmax)
-        c[order["nn_dev_index"][key]] = float(weights.beta_nn)
+        c[order["c_np_dev_index"][key]] = float(weights.beta_np)
     for row_index, _country_id in enumerate(case.country_ids):
         c[order["u_in_offset"] + row_index] = float(weights.alpha)
         c[order["u_out_offset"] + row_index] = float(weights.alpha)
@@ -572,29 +552,27 @@ def _build_lp_problem(case: OptimizationCase, weights: ObjectiveWeights) -> tupl
     for hs_case in case.hs_cases:
         for (exporter, importer), quantity in hs_case.pp_edges.items():
             key = (hs_case.folder_name, exporter, importer)
-            index = order["a_index"][key]
+            index = order["c_pp_index"][key]
             a_eq[country_row[importer], index] += float(quantity)
             a_eq[country_row[exporter], index] -= float(quantity)
-            add_deviation_constraints(index, order["a_dev_index"][key], float(quantity), hs_case.crec)
+            add_deviation_constraints(index, order["c_pp_dev_index"][key], float(quantity), hs_case.crec)
         for exporter, quantity in hs_case.pn_totals.items():
             key = (hs_case.folder_name, exporter)
-            index = order["b_index"][key]
+            index = order["c_pn_index"][key]
             a_eq[country_row[exporter], index] -= float(quantity)
-            add_deviation_constraints(index, order["b_dev_index"][key], float(quantity), hs_case.crec)
+            add_deviation_constraints(index, order["c_pn_dev_index"][key], float(quantity), hs_case.crec)
         for (exporter, importer), quantity in hs_case.np_edges.items():
             key = (hs_case.folder_name, importer)
-            index = order["g_index"][key]
+            index = order["c_np_index"][key]
             a_eq[country_row[importer], index] += float(quantity)
-            if exporter in hs_case.target_countries:
-                a_eq[country_row[exporter], index] -= float(quantity)
         for importer, quantity in hs_case.np_totals.items():
             key = (hs_case.folder_name, importer)
-            add_deviation_constraints(order["g_index"][key], order["g_dev_index"][key], float(quantity), hs_case.crec)
-        for exporter, quantity in hs_case.nn_totals.items():
-            key = (hs_case.folder_name, exporter)
-            index = order["nn_index"][key]
-            a_eq[country_row[exporter], index] -= float(quantity)
-            add_deviation_constraints(index, order["nn_dev_index"][key], float(quantity), hs_case.crec)
+            add_deviation_constraints(
+                order["c_np_index"][key],
+                order["c_np_dev_index"][key],
+                float(quantity),
+                hs_case.crec,
+            )
     a_ub = np.vstack(ub_rows) if ub_rows else np.zeros((0, variable_count), dtype=float)
     b_ub = np.asarray(ub_rhs, dtype=float) if ub_rhs else np.zeros(0, dtype=float)
 
@@ -702,13 +680,11 @@ def _extract_solution_maps(
     dict[tuple[str, int, int], float],
     dict[tuple[str, int], float],
     dict[tuple[str, int], float],
-    dict[tuple[str, int], float],
 ]:
-    a_values = {key: float(solution[index]) for key, index in order["a_index"].items()}
-    b_values = {key: float(solution[index]) for key, index in order["b_index"].items()}
-    g_values = {key: float(solution[index]) for key, index in order["g_index"].items()}
-    nn_values = {key: float(solution[index]) for key, index in order["nn_index"].items()}
-    return a_values, b_values, g_values, nn_values
+    c_pp_values = {key: float(solution[index]) for key, index in order["c_pp_index"].items()}
+    c_pn_values = {key: float(solution[index]) for key, index in order["c_pn_index"].items()}
+    c_np_values = {key: float(solution[index]) for key, index in order["c_np_index"].items()}
+    return c_pp_values, c_pn_values, c_np_values
 
 
 def _baseline_value_maps(
@@ -717,53 +693,41 @@ def _baseline_value_maps(
     dict[tuple[str, int, int], float],
     dict[tuple[str, int], float],
     dict[tuple[str, int], float],
-    dict[tuple[str, int], float],
 ]:
-    a_values: dict[tuple[str, int, int], float] = {}
-    b_values: dict[tuple[str, int], float] = {}
-    g_values: dict[tuple[str, int], float] = {}
-    nn_values: dict[tuple[str, int], float] = {}
+    c_pp_values: dict[tuple[str, int, int], float] = {}
+    c_pn_values: dict[tuple[str, int], float] = {}
+    c_np_values: dict[tuple[str, int], float] = {}
     for hs_case in case.hs_cases:
         for exporter, importer in hs_case.pp_edges:
-            a_values[(hs_case.folder_name, exporter, importer)] = hs_case.crec
+            c_pp_values[(hs_case.folder_name, exporter, importer)] = hs_case.crec
         for exporter in hs_case.pn_totals:
-            b_values[(hs_case.folder_name, exporter)] = hs_case.crec
+            c_pn_values[(hs_case.folder_name, exporter)] = hs_case.crec
         for importer in hs_case.np_totals:
-            g_values[(hs_case.folder_name, importer)] = hs_case.crec
-        for exporter in hs_case.nn_totals:
-            nn_values[(hs_case.folder_name, exporter)] = hs_case.crec
-    return a_values, b_values, g_values, nn_values
+            c_np_values[(hs_case.folder_name, importer)] = hs_case.crec
+    return c_pp_values, c_pn_values, c_np_values
 
 
 def _evaluate_case(
     case: OptimizationCase,
-    a_values: dict[tuple[str, int, int], float],
-    b_values: dict[tuple[str, int], float],
-    g_values: dict[tuple[str, int], float],
-    nn_values: dict[tuple[str, int], float],
+    c_pp_values: dict[tuple[str, int, int], float],
+    c_pn_values: dict[tuple[str, int], float],
+    c_np_values: dict[tuple[str, int], float],
 ) -> pd.DataFrame:
     pp_imports: dict[int, float] = {}
     np_imports: dict[int, float] = {}
     pp_exports: dict[int, float] = {}
     pn_exports: dict[int, float] = {}
-    np_exports: dict[int, float] = {}
-    nn_exports: dict[int, float] = {}
     for hs_case in case.hs_cases:
         for (exporter, importer), quantity in hs_case.pp_edges.items():
-            flow = float(quantity) * float(a_values[(hs_case.folder_name, exporter, importer)])
+            flow = float(quantity) * float(c_pp_values[(hs_case.folder_name, exporter, importer)])
             pp_imports[importer] = pp_imports.get(importer, 0.0) + flow
             pp_exports[exporter] = pp_exports.get(exporter, 0.0) + flow
         for exporter, quantity in hs_case.pn_totals.items():
-            flow = float(quantity) * float(b_values[(hs_case.folder_name, exporter)])
+            flow = float(quantity) * float(c_pn_values[(hs_case.folder_name, exporter)])
             pn_exports[exporter] = pn_exports.get(exporter, 0.0) + flow
         for (exporter, importer), quantity in hs_case.np_edges.items():
-            flow = float(quantity) * float(g_values[(hs_case.folder_name, importer)])
+            flow = float(quantity) * float(c_np_values[(hs_case.folder_name, importer)])
             np_imports[importer] = np_imports.get(importer, 0.0) + flow
-            if exporter in hs_case.target_countries:
-                np_exports[exporter] = np_exports.get(exporter, 0.0) + flow
-        for exporter, quantity in hs_case.nn_totals.items():
-            flow = float(quantity) * float(nn_values[(hs_case.folder_name, exporter)])
-            nn_exports[exporter] = nn_exports.get(exporter, 0.0) + flow
 
     rows: list[dict[str, Any]] = []
     for country_id in case.country_ids:
@@ -773,10 +737,8 @@ def _evaluate_case(
         np_import_value = float(np_imports.get(country_id, 0.0))
         pp_export_value = float(pp_exports.get(country_id, 0.0))
         pn_export_value = float(pn_exports.get(country_id, 0.0))
-        np_export_value = float(np_exports.get(country_id, 0.0))
-        nn_export_value = float(nn_exports.get(country_id, 0.0))
         import_value = pp_import_value + np_import_value
-        export_value = pp_export_value + pn_export_value + np_export_value + nn_export_value
+        export_value = pp_export_value + pn_export_value
         balance = supply + import_value - demand - export_value
         special_in = max(-balance, 0.0)
         special_out = max(balance, 0.0)
@@ -797,8 +759,6 @@ def _evaluate_case(
                 "NP_import": np_import_value,
                 "PP_export": pp_export_value,
                 "PN_export": pn_export_value,
-                "NP_export": np_export_value,
-                "NN_export": nn_export_value,
                 "import_value": import_value,
                 "export_value": export_value,
                 "balance": balance,
@@ -822,8 +782,6 @@ def _merge_country_results(baseline_df: pd.DataFrame, optimized_df: pd.DataFrame
             "NP_import_baseline": "baseline_NP_import",
             "PP_export_baseline": "baseline_PP_export",
             "PN_export_baseline": "baseline_PN_export",
-            "NP_export_baseline": "baseline_NP_export",
-            "NN_export_baseline": "baseline_NN_export",
             "import_value_baseline": "baseline_import",
             "export_value_baseline": "baseline_export",
             "balance_baseline": "baseline_balance",
@@ -834,8 +792,6 @@ def _merge_country_results(baseline_df: pd.DataFrame, optimized_df: pd.DataFrame
             "NP_import_optimized": "optimized_NP_import",
             "PP_export_optimized": "optimized_PP_export",
             "PN_export_optimized": "optimized_PN_export",
-            "NP_export_optimized": "optimized_NP_export",
-            "NN_export_optimized": "optimized_NN_export",
             "import_value_optimized": "optimized_import",
             "export_value_optimized": "optimized_export",
             "balance_optimized": "optimized_balance",
@@ -860,8 +816,8 @@ def _merge_country_results(baseline_df: pd.DataFrame, optimized_df: pd.DataFrame
 
 def _evaluate_source_scaling(
     case: OptimizationCase,
-    a_values: dict[tuple[str, int, int], float],
-    b_values: dict[tuple[str, int], float],
+    c_pp_values: dict[tuple[str, int, int], float],
+    c_pn_values: dict[tuple[str, int], float],
 ) -> pd.DataFrame:
     target_flows: dict[int, float] = {}
     non_target_flows: dict[int, float] = {}
@@ -869,10 +825,10 @@ def _evaluate_source_scaling(
 
     for hs_case in case.hs_cases:
         for (exporter, importer), quantity in hs_case.pp_edges.items():
-            flow = float(quantity) * float(a_values[(hs_case.folder_name, exporter, importer)])
+            flow = float(quantity) * float(c_pp_values[(hs_case.folder_name, exporter, importer)])
             target_flows[exporter] = target_flows.get(exporter, 0.0) + flow
         for exporter, quantity in hs_case.pn_totals.items():
-            flow = float(quantity) * float(b_values[(hs_case.folder_name, exporter)])
+            flow = float(quantity) * float(c_pn_values[(hs_case.folder_name, exporter)])
             non_target_flows[exporter] = non_target_flows.get(exporter, 0.0) + flow
 
     rows: list[dict[str, Any]] = []
@@ -922,12 +878,11 @@ def _merge_source_scaling_results(baseline_df: pd.DataFrame, optimized_df: pd.Da
 
 def _build_factor_tables(
     case: OptimizationCase,
-    a_values: dict[tuple[str, int, int], float],
-    b_values: dict[tuple[str, int], float],
-    g_values: dict[tuple[str, int], float],
-    nn_values: dict[tuple[str, int], float],
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    a_columns = [
+    c_pp_values: dict[tuple[str, int, int], float],
+    c_pn_values: dict[tuple[str, int], float],
+    c_np_values: dict[tuple[str, int], float],
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    c_pp_columns = [
         "folder_name",
         "hs_code",
         "source_country_i",
@@ -938,9 +893,9 @@ def _build_factor_tables(
         "Cmin",
         "Cmax",
         "Crec",
-        "optimized_A_ij",
+        "optimized_c_pp",
     ]
-    b_columns = [
+    c_pn_columns = [
         "folder_name",
         "hs_code",
         "source_country_i",
@@ -949,9 +904,9 @@ def _build_factor_tables(
         "Cmin",
         "Cmax",
         "Crec",
-        "optimized_B_i",
+        "optimized_c_pn",
     ]
-    g_columns = [
+    c_np_columns = [
         "folder_name",
         "hs_code",
         "target_country_j",
@@ -960,27 +915,15 @@ def _build_factor_tables(
         "Cmin",
         "Cmax",
         "Crec",
-        "optimized_G_j",
+        "optimized_c_np",
     ]
-    nn_columns = [
-        "folder_name",
-        "hs_code",
-        "source_country_i",
-        "source_country_id",
-        "raw_trade_quantity_t",
-        "Cmin",
-        "Cmax",
-        "Crec",
-        "optimized_NN_i",
-    ]
-    a_rows: list[dict[str, Any]] = []
-    b_rows: list[dict[str, Any]] = []
-    g_rows: list[dict[str, Any]] = []
-    nn_rows: list[dict[str, Any]] = []
+    c_pp_rows: list[dict[str, Any]] = []
+    c_pn_rows: list[dict[str, Any]] = []
+    c_np_rows: list[dict[str, Any]] = []
     for hs_case in case.hs_cases:
         for (exporter, importer), quantity in sorted(hs_case.pp_edges.items()):
-            optimized_a = float(a_values[(hs_case.folder_name, exporter, importer)])
-            a_rows.append(
+            optimized_c_pp = float(c_pp_values[(hs_case.folder_name, exporter, importer)])
+            c_pp_rows.append(
                 {
                     "folder_name": hs_case.folder_name,
                     "hs_code": hs_case.hs_code,
@@ -992,12 +935,12 @@ def _build_factor_tables(
                     "Cmin": hs_case.cmin,
                     "Cmax": hs_case.cmax,
                     "Crec": hs_case.crec,
-                    "optimized_A_ij": optimized_a,
+                    "optimized_c_pp": optimized_c_pp,
                 }
             )
         for exporter, quantity in sorted(hs_case.pn_totals.items()):
-            optimized_b = float(b_values[(hs_case.folder_name, exporter)])
-            b_rows.append(
+            optimized_c_pn = float(c_pn_values[(hs_case.folder_name, exporter)])
+            c_pn_rows.append(
                 {
                     "folder_name": hs_case.folder_name,
                     "hs_code": hs_case.hs_code,
@@ -1007,12 +950,12 @@ def _build_factor_tables(
                     "Cmin": hs_case.cmin,
                     "Cmax": hs_case.cmax,
                     "Crec": hs_case.crec,
-                    "optimized_B_i": optimized_b,
+                    "optimized_c_pn": optimized_c_pn,
                 }
             )
         for importer, quantity in sorted(hs_case.np_totals.items()):
-            optimized_g = float(g_values[(hs_case.folder_name, importer)])
-            g_rows.append(
+            optimized_c_np = float(c_np_values[(hs_case.folder_name, importer)])
+            c_np_rows.append(
                 {
                     "folder_name": hs_case.folder_name,
                     "hs_code": hs_case.hs_code,
@@ -1022,29 +965,13 @@ def _build_factor_tables(
                     "Cmin": hs_case.cmin,
                     "Cmax": hs_case.cmax,
                     "Crec": hs_case.crec,
-                    "optimized_G_j": optimized_g,
-                }
-            )
-        for exporter, quantity in sorted(hs_case.nn_totals.items()):
-            optimized_nn = float(nn_values[(hs_case.folder_name, exporter)])
-            nn_rows.append(
-                {
-                    "folder_name": hs_case.folder_name,
-                    "hs_code": hs_case.hs_code,
-                    "source_country_i": case.country_names.get(exporter, f"Country {exporter}"),
-                    "source_country_id": exporter,
-                    "raw_trade_quantity_t": float(quantity),
-                    "Cmin": hs_case.cmin,
-                    "Cmax": hs_case.cmax,
-                    "Crec": hs_case.crec,
-                    "optimized_NN_i": optimized_nn,
+                    "optimized_c_np": optimized_c_np,
                 }
             )
     return (
-        pd.DataFrame(a_rows, columns=a_columns),
-        pd.DataFrame(b_rows, columns=b_columns),
-        pd.DataFrame(g_rows, columns=g_columns),
-        pd.DataFrame(nn_rows, columns=nn_columns),
+        pd.DataFrame(c_pp_rows, columns=c_pp_columns),
+        pd.DataFrame(c_pn_rows, columns=c_pn_columns),
+        pd.DataFrame(c_np_rows, columns=c_np_columns),
     )
 
 
@@ -1106,7 +1033,7 @@ def _build_notes_table(case: OptimizationCase, weights: ObjectiveWeights, solver
         {
             "note_type": "formulation",
             "note": (
-                "Current formulation: optimise PP, PN, NP, and NN conversion factors against recommended "
+                "Current formulation: optimise PP, PN, and NP conversion factors against recommended "
                 "trade flows while minimizing total unknown-node mass. Bounds are implemented as closed intervals."
             ),
         },
@@ -1155,10 +1082,9 @@ def _write_outputs(
     solver_python: str,
     country_df: pd.DataFrame,
     source_scale_df: pd.DataFrame,
-    a_factor_df: pd.DataFrame,
-    b_factor_df: pd.DataFrame,
-    g_factor_df: pd.DataFrame,
-    nn_factor_df: pd.DataFrame,
+    c_pp_factor_df: pd.DataFrame,
+    c_pn_factor_df: pd.DataFrame,
+    c_np_factor_df: pd.DataFrame,
     summary_df: pd.DataFrame,
     special_case_df: pd.DataFrame,
     output_root: Path,
@@ -1170,10 +1096,9 @@ def _write_outputs(
 
     country_df.to_csv(case_output_dir / "country_results.csv", index=False)
     source_scale_df.to_csv(case_output_dir / "source_scaling.csv", index=False)
-    a_factor_df.to_csv(case_output_dir / "factor_A.csv", index=False)
-    b_factor_df.to_csv(case_output_dir / "factor_B.csv", index=False)
-    g_factor_df.to_csv(case_output_dir / "factor_G.csv", index=False)
-    nn_factor_df.to_csv(case_output_dir / "factor_NN.csv", index=False)
+    c_pp_factor_df.to_csv(case_output_dir / "factor_c_pp.csv", index=False)
+    c_pn_factor_df.to_csv(case_output_dir / "factor_c_pn.csv", index=False)
+    c_np_factor_df.to_csv(case_output_dir / "factor_c_np.csv", index=False)
     summary_df.to_csv(case_output_dir / "summary.csv", index=False)
     special_case_df.to_csv(case_output_dir / "special_case_adjustments.csv", index=False)
     notes_df.to_csv(case_output_dir / "notes.csv", index=False)
@@ -1181,10 +1106,9 @@ def _write_outputs(
     with pd.ExcelWriter(workbook_path, engine="openpyxl") as writer:
         country_df.to_excel(writer, sheet_name="country_results", index=False)
         source_scale_df.to_excel(writer, sheet_name="source_scaling", index=False)
-        a_factor_df.to_excel(writer, sheet_name="factor_A", index=False)
-        b_factor_df.to_excel(writer, sheet_name="factor_B", index=False)
-        g_factor_df.to_excel(writer, sheet_name="factor_G", index=False)
-        nn_factor_df.to_excel(writer, sheet_name="factor_NN", index=False)
+        c_pp_factor_df.to_excel(writer, sheet_name="factor_c_pp", index=False)
+        c_pn_factor_df.to_excel(writer, sheet_name="factor_c_pn", index=False)
+        c_np_factor_df.to_excel(writer, sheet_name="factor_c_np", index=False)
         summary_df.to_excel(writer, sheet_name="summary", index=False)
         special_case_df.to_excel(writer, sheet_name="special_cases", index=False)
         notes_df.to_excel(writer, sheet_name="notes", index=False)
@@ -1230,20 +1154,19 @@ def run_conversion_factor_optimization(
 
     problem, order = _build_lp_problem(case, weights)
     solution, solver_backend, resolved_solver_python = _solve_linear_program(problem, solver_python=solver_python)
-    optimized_a, optimized_b, optimized_g, optimized_nn = _extract_solution_maps(order, solution)
-    baseline_a, baseline_b, baseline_g, baseline_nn = _baseline_value_maps(case)
-    baseline_eval = _evaluate_case(case, baseline_a, baseline_b, baseline_g, baseline_nn)
-    optimized_eval = _evaluate_case(case, optimized_a, optimized_b, optimized_g, optimized_nn)
+    optimized_a, optimized_b, optimized_g = _extract_solution_maps(order, solution)
+    baseline_a, baseline_b, baseline_g = _baseline_value_maps(case)
+    baseline_eval = _evaluate_case(case, baseline_a, baseline_b, baseline_g)
+    optimized_eval = _evaluate_case(case, optimized_a, optimized_b, optimized_g)
     country_df = _merge_country_results(baseline_eval, optimized_eval)
     baseline_source_scale = _evaluate_source_scaling(case, baseline_a, baseline_b)
     optimized_source_scale = _evaluate_source_scaling(case, optimized_a, optimized_b)
     source_scale_df = _merge_source_scaling_results(baseline_source_scale, optimized_source_scale)
-    a_factor_df, b_factor_df, g_factor_df, nn_factor_df = _build_factor_tables(
+    c_pp_factor_df, c_pn_factor_df, c_np_factor_df = _build_factor_tables(
         case,
         optimized_a,
         optimized_b,
         optimized_g,
-        optimized_nn,
     )
     special_case_df = _build_special_case_table(case)
 
@@ -1262,10 +1185,9 @@ def run_conversion_factor_optimization(
                 "optimized_SN_total": optimized_total,
                 "reduction_ratio": reduction_ratio,
                 "number_of_countries": len(case.country_ids),
-                "number_of_A_variables": len(order["a_keys"]),
-                "number_of_B_variables": len(order["b_keys"]),
-                "number_of_G_variables": len(order["g_keys"]),
-                "number_of_NN_variables": len(order["nn_keys"]),
+                "number_of_c_pp_variables": len(order["c_pp_keys"]),
+                "number_of_c_pn_variables": len(order["c_pn_keys"]),
+                "number_of_c_np_variables": len(order["c_np_keys"]),
                 "solver_backend": solver_backend,
                 "solver_python": resolved_solver_python,
             }
@@ -1281,10 +1203,9 @@ def run_conversion_factor_optimization(
         solver_python=resolved_solver_python,
         country_df=country_df,
         source_scale_df=source_scale_df,
-        a_factor_df=a_factor_df,
-        b_factor_df=b_factor_df,
-        g_factor_df=g_factor_df,
-        nn_factor_df=nn_factor_df,
+        c_pp_factor_df=c_pp_factor_df,
+        c_pn_factor_df=c_pn_factor_df,
+        c_np_factor_df=c_np_factor_df,
         summary_df=summary_df,
         special_case_df=special_case_df,
         output_root=resolved_output_root,
@@ -1298,10 +1219,9 @@ def run_conversion_factor_optimization(
         summary_df=summary_df,
         country_df=country_df,
         source_scale_df=source_scale_df,
-        a_factor_df=a_factor_df,
-        b_factor_df=b_factor_df,
-        g_factor_df=g_factor_df,
-        nn_factor_df=nn_factor_df,
+        c_pp_factor_df=c_pp_factor_df,
+        c_pn_factor_df=c_pn_factor_df,
+        c_np_factor_df=c_np_factor_df,
         special_case_df=special_case_df,
         notes_df=notes_df,
     )

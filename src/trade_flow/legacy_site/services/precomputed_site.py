@@ -612,6 +612,8 @@ def _apply_access_mode(payload: dict[str, Any], access_mode: str) -> dict[str, A
         "parametersActive": [],
         "producerCoefficients": [],
         "transitions": [],
+        "unknownBreakdown": [],
+        "tradeFlows": [],
         "activeTableView": "guest",
         "transitionNote": "Diagnostics are hidden in guest mode.",
     }
@@ -669,7 +671,7 @@ def _build_app_payload_uncached(
         "Original-only diagnostics are shown in this mode. Stage-level optimization diagnostics appear when you switch to First Optimization."
         if scenario == "baseline"
         else (
-            "First Optimization now renders the latest conversion_factor_optimization result after synchronizing it into the published runtime snapshot. The non-guest tables below Sorting Studio summarize stage outcomes, bounds, special handling, source scaling, and A / B / G / NN coefficients."
+            "First Optimization now renders the latest conversion_factor_optimization result after synchronizing it into the published runtime snapshot. The non-guest tables below Sorting Studio summarize stage outcomes, bounds, special handling, source scaling, and c_pp / c_pn / c_np coefficients."
             if scenario == "first_optimization"
             else "Diagnostics summarize the selected optimization output."
         )
@@ -704,6 +706,8 @@ def _build_app_payload_uncached(
             "parametersActive": repo.build_parameter_rows(metal, scenario, table_view, cobalt_mode, year),
             "producerCoefficients": repo.get_producer_coefficient_rows(metal, year, scenario, cobalt_mode),
             "transitions": repo.get_transition_rows(metal, year, scenario, cobalt_mode),
+            "unknownBreakdown": repo.get_unknown_breakdown_rows(metal, year, scenario, cobalt_mode),
+            "tradeFlows": repo.get_trade_flow_compare_rows(metal, year, scenario, cobalt_mode),
             "activeTableView": resolved_table_view,
             "transitionNote": transition_note,
         },

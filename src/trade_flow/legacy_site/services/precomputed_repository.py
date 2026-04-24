@@ -54,6 +54,27 @@ METRIC_ORDER = [
     ("total_special", "Total Special"),
     ("total_regular", "Total Regular"),
 ]
+STAGE_GROUP_STAGES = {
+    "S1-S2-S3": ("S1", "S2", "S3"),
+    "S3-S4-S5": ("S3", "S4", "S5"),
+    "S5-S6-S7": ("S5", "S6", "S7"),
+}
+LINK_STAGE_GROUPS = {
+    "S1": "S1-S2-S3",
+    "S2": "S1-S2-S3",
+    "S3": "S3-S4-S5",
+    "S4": "S3-S4-S5",
+    "S5": "S5-S6-S7",
+    "S6": "S5-S6-S7",
+    "S7": "S5-S6-S7",
+}
+UNKNOWN_BREAKDOWN_TYPES = (
+    ("unknown_source", "Unknown Source"),
+    ("unknown_destination", "Unknown Destination"),
+    ("non_source", "From Non-Source Countries"),
+    ("non_target", "To Non-Target Countries"),
+    ("structural_sink", "Structural Sink"),
+)
 PARAMETER_LABELS = {
     "mirror_weight": "Mirror Weight",
     "lag_weight": "Lag Weight",
@@ -116,6 +137,19 @@ def _folder_has_real_hs_code(folder_name: str) -> bool:
         return True
     hs_code = tail.rsplit("_", 1)[-1]
     return not hs_code.isdigit() or any(char != "0" for char in hs_code)
+
+
+def _numeric_series(frame: pd.DataFrame, column: str) -> pd.Series:
+    if column not in frame:
+        return pd.Series(0.0, index=frame.index)
+    return pd.to_numeric(frame[column], errors="coerce").fillna(0.0)
+
+
+def _stage_group_for_link(source_stage: Any, target_stage: Any) -> str:
+    source_group = LINK_STAGE_GROUPS.get(str(source_stage or ""))
+    if source_group:
+        return source_group
+    return LINK_STAGE_GROUPS.get(str(target_stage or ""), "Other")
 
 
 
@@ -417,6 +451,164 @@ class OutputRepository:
         nodes = self.load_case_csv(metal, year, scenario, "nodes", cobalt_mode)
         return _stage_rows_from_nodes(nodes)
 
+    def _node_breakdown_totals(self, nodes: pd.DataFrame, stages: tuple[str, ...]) -> dict[str, float]:
+        if nodes.empty or "stage" not in nodes:
+            return {key: 0.0 for key, _label in UNKNOWN_BREAKDOWN_TYPES} | {"total_special": 0.0}
+
+        working = nodes[nodes["stage"].astype(str).isin(stages)].copy()
+        if working.empty:
+            return {key: 0.0 for key, _label in UNKNOWN_BREAKDOWN_TYPES} | {"total_special": 0.0}
+
+        values = _numeric_series(working, "value")
+        kinds = working.get("kind", pd.Series("", index=working.index)).astype(str)
+        is_unknown = _numeric_series(working, "is_unknown") > 0
+        is_non_source = _numeric_series(working, "is_non_source") > 0
+        is_non_target = _numeric_series(working, "is_non_target") > 0
+        is_structural_sink = _numeric_series(working, "is_structural_sink") > 0
+
+        return {
+            "unknown_source": float(values[is_unknown & kinds.eq("source_special")].sum()),
+            "unknown_destination": float(values[is_unknown & kinds.eq("sink_special")].sum()),
+            "non_source": float(values[is_non_source].sum()),
+            "non_target": float(values[is_non_target].sum()),
+            "structural_sink": float(values[is_structural_sink].sum()),
+            "total_special": float(values[kinds.ne("regular")].sum()),
+        }
+
+    def get_unknown_breakdown_rows(
+        self,
+        metal: str,
+        year: int,
+        scenario: str,
+        cobalt_mode: str = "mid",
+    ) -> list[dict[str, Any]]:
+        if scenario != "first_optimization":
+            return []
+
+        baseline_nodes = self.load_case_csv(metal, year, "baseline", "nodes", cobalt_mode)
+        optimized_nodes = self.load_case_csv(metal, year, scenario, "nodes", cobalt_mode)
+        rows: list[dict[str, Any]] = []
+
+        for stage_group, stages in STAGE_GROUP_STAGES.items():
+            baseline_totals = self._node_breakdown_totals(baseline_nodes, stages)
+            optimized_totals = self._node_breakdown_totals(optimized_nodes, stages)
+            stage_reduction = baseline_totals["total_special"] - optimized_totals["total_special"]
+
+            for order, (key, label) in enumerate(UNKNOWN_BREAKDOWN_TYPES):
+                original_value = baseline_totals[key]
+                optimized_value = optimized_totals[key]
+                reduction = original_value - optimized_value
+                rows.append(
+                    {
+                        "stage_group": stage_group,
+                        "type_key": key,
+                        "unknown_type": label,
+                        "original_value": original_value,
+                        "optimized_value": optimized_value,
+                        "reduction": reduction,
+                        "change": optimized_value - original_value,
+                        "reduction_pct": (reduction / original_value) if abs(original_value) > 1e-9 else 0.0,
+                        "stage_special_original": baseline_totals["total_special"],
+                        "stage_special_optimized": optimized_totals["total_special"],
+                        "stage_special_reduction": stage_reduction,
+                        "type_order": order,
+                    }
+                )
+
+            rows.append(
+                {
+                    "stage_group": stage_group,
+                    "type_key": "total_special",
+                    "unknown_type": "Total Special Nodes",
+                    "original_value": baseline_totals["total_special"],
+                    "optimized_value": optimized_totals["total_special"],
+                    "reduction": stage_reduction,
+                    "change": optimized_totals["total_special"] - baseline_totals["total_special"],
+                    "reduction_pct": (
+                        stage_reduction / baseline_totals["total_special"]
+                        if abs(baseline_totals["total_special"]) > 1e-9
+                        else 0.0
+                    ),
+                    "stage_special_original": baseline_totals["total_special"],
+                    "stage_special_optimized": optimized_totals["total_special"],
+                    "stage_special_reduction": stage_reduction,
+                    "type_order": len(UNKNOWN_BREAKDOWN_TYPES),
+                }
+            )
+
+        return rows
+
+    def get_trade_flow_compare_rows(
+        self,
+        metal: str,
+        year: int,
+        scenario: str,
+        cobalt_mode: str = "mid",
+    ) -> list[dict[str, Any]]:
+        if scenario != "first_optimization":
+            return []
+
+        baseline_links = self.load_case_csv(metal, year, "baseline", "links", cobalt_mode)
+        optimized_links = self.load_case_csv(metal, year, scenario, "links", cobalt_mode)
+
+        def indexed(frame: pd.DataFrame) -> dict[tuple[str, str, str, str, str, str], float]:
+            if frame.empty:
+                return {}
+            working = frame.copy()
+            working["value"] = _numeric_series(working, "value")
+            keys = ["source", "source_stage", "source_label", "target", "target_stage", "target_label"]
+            for column in keys:
+                if column not in working:
+                    working[column] = ""
+                working[column] = working[column].astype(str)
+            grouped = working.groupby(keys, dropna=False)["value"].sum().reset_index()
+            return {
+                tuple(str(record[column]) for column in keys): float(record["value"])
+                for record in grouped.to_dict(orient="records")
+            }
+
+        baseline_by_key = indexed(baseline_links)
+        optimized_by_key = indexed(optimized_links)
+        rows: list[dict[str, Any]] = []
+        for key in sorted(set(baseline_by_key) | set(optimized_by_key)):
+            source, source_stage, source_label, target, target_stage, target_label = key
+            original_value = baseline_by_key.get(key, 0.0)
+            optimized_value = optimized_by_key.get(key, 0.0)
+            change = optimized_value - original_value
+            if abs(original_value) <= 1e-9 and optimized_value > 1e-9:
+                status = "New"
+            elif original_value > 1e-9 and abs(optimized_value) <= 1e-9:
+                status = "Removed"
+            elif change < -1e-9:
+                status = "Reduced"
+            elif change > 1e-9:
+                status = "Increased"
+            else:
+                status = "Flat"
+            special_signal = "special:" in source or "special:" in target
+            label_signal = any(
+                token in f"{source_label} {target_label}".lower()
+                for token in ("unknown", "non-", "unrelated")
+            )
+            rows.append(
+                {
+                    "stage_group": _stage_group_for_link(source_stage, target_stage),
+                    "source_stage": source_stage,
+                    "target_stage": target_stage,
+                    "source_label": source_label,
+                    "target_label": target_label,
+                    "flow_type": "Unknown / special" if special_signal or label_signal else "Country flow",
+                    "original_value": original_value,
+                    "optimized_value": optimized_value,
+                    "change": change,
+                    "reduction": original_value - optimized_value,
+                    "change_pct": (change / original_value) if abs(original_value) > 1e-9 else 0.0,
+                    "status": status,
+                }
+            )
+        rows.sort(key=lambda row: abs(float(row["change"])), reverse=True)
+        return rows
+
     def get_comparison_row(self, metal: str, year: int, scenario: str, cobalt_mode: str = "mid") -> dict[str, Any]:
         if scenario == "first_optimization" and self.first_optimization_tables.available:
             return self.first_optimization_tables.comparison_row(metal, year)
@@ -520,7 +712,6 @@ class OutputRepository:
                     {"label": "PP edges", "value": _safe_int(record.get("pp_edge_count"))},
                     {"label": "PN edges", "value": _safe_int(record.get("pn_edge_count"))},
                     {"label": "NP edges", "value": _safe_int(record.get("np_edge_count"))},
-                    {"label": "NN edges", "value": _safe_int(record.get("nn_edge_count"))},
                 ]
                 producer_pairs = [
                     {
@@ -693,6 +884,9 @@ class OutputRepository:
                     "producer_scope": producer_scope,
                     "partner_scope": partner_scope,
                     "coef_value": _safe_float(record.get("coef_value")),
+                    "recommended_value": _safe_float(record.get("recommended_value")),
+                    "lower_bound": _safe_float(record.get("lower_bound")),
+                    "upper_bound": _safe_float(record.get("upper_bound")),
                     "bounds": f"[{_safe_float(record.get('lower_bound')):.2f}, {_safe_float(record.get('upper_bound')):.2f}]",
                     "bound_status": bound_status,
                     "exposure": _safe_float(record.get("exposure")),
@@ -829,7 +1023,7 @@ class OutputRepository:
                 "First Optimization is synchronized from the latest conversion_factor_optimization output into the published runtime snapshot before the Sankey is rendered."
             )
             notes.append(
-                "Overview, stage outcomes, stage diagnostics, source-scaling rows, and coefficient tables summarize factor_A / factor_B / factor_G / factor_NN outputs without changing the rest of the site workflow."
+                "Overview, stage outcomes, stage diagnostics, source-scaling rows, and coefficient tables summarize factor_c_pp / factor_c_pn / factor_c_np outputs without changing the rest of the site workflow."
             )
         if scenario != "baseline":
             best = self.get_best_params(metal, scenario, cobalt_mode)

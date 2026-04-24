@@ -18,6 +18,17 @@ const state = {
   accessMode: "guest",
   accessPassword: "",
   accessUnlocked: false,
+  currentTables: null,
+  diagnosticFilters: {
+    coefficientSearch: "",
+    coefficientStage: "all",
+    coefficientClass: "all",
+    coefficientBound: "all",
+    selectedCoefficientKey: "",
+    tradeSearch: "",
+    tradeStage: "all",
+    tradeStatus: "all",
+  },
   years: [],
   stageLabels: {},
   stageOrder: [],
@@ -457,7 +468,7 @@ async function loadFigure() {
         ? "Diagnostics are hidden in guest mode."
       : state.resultMode === "baseline"
         ? `Diagnostics: Original only. Switch to First Optimization for optimizer-stage summaries.`
-        : `Diagnostics: ${resultModeLabel(payload.resultMode)} stage summaries, bounds, source scaling, and A/B/G/NN coefficients.`;
+        : `Diagnostics: ${resultModeLabel(payload.resultMode)} stage summaries, bounds, source scaling, and c_pp/c_pn/c_np coefficients.`;
   state.lastChartHeight = Number(payload.figure?.layout?.height || 0);
   await renderChartFigure(payload.figure);
   if (renderToken !== figureRenderToken) {
@@ -1012,6 +1023,171 @@ function buildStageStatHtml(item) {
   `;
 }
 
+function asNumber(value) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value.replaceAll(",", "").replace("%", ""));
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+}
+
+function stageGroupRank(stageGroup) {
+  return { "S1-S2-S3": 0, "S3-S4-S5": 1, "S5-S6-S7": 2 }[stageGroup] ?? 99;
+}
+
+function metricValue(rows, label) {
+  const row = findRowByLabel(
+    (rows || []).map((item) => ({
+      label: extractLabel(item),
+      value: extractValue(item),
+      note: extractNote(item),
+    })),
+    label,
+  );
+  return row?.value;
+}
+
+function coefficientRowKey(row) {
+  return [
+    row.transition_display || row.transition || "",
+    row.hs_code || "",
+    row.coefficient_class || "",
+    row.producer_scope || "",
+    row.partner_scope || "",
+  ].join("::");
+}
+
+function buildToneBadge(label, tone = "neutral") {
+  const normalized = normalizeLabel(tone || label);
+  if (["positive", "negative", "warn", "neutral"].includes(normalized)) {
+    return `<span class="delta-badge ${normalized}">${escapeHtml(label || "-")}</span>`;
+  }
+  const className =
+    normalized.includes("reduced") || normalized.includes("success") || normalized.includes("interior")
+      ? "positive"
+      : normalized.includes("increased") || normalized.includes("upper") || normalized.includes("lower") || normalized.includes("removed")
+        ? "warn"
+        : "neutral";
+  return `<span class="delta-badge ${className}">${escapeHtml(label || "-")}</span>`;
+}
+
+function formatSignedChange(value, key = "change") {
+  if (!isPresent(value)) {
+    return "-";
+  }
+  const numeric = asNumber(value);
+  const prefix = numeric > 0 ? "+" : "";
+  return `${prefix}${formatValue(numeric, key)}`;
+}
+
+function buildFilterButtons(name, options, activeValue) {
+  return `
+    <div class="explorer-filter-group" role="group" aria-label="${escapeHtml(name)}">
+      ${options
+        .map(
+          (option) => `
+            <button
+              type="button"
+              class="explorer-filter-btn${option.value === activeValue ? " active" : ""}"
+              data-filter="${escapeHtml(name)}"
+              data-value="${escapeHtml(option.value)}"
+            >${escapeHtml(option.label)}</button>
+          `,
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function rowMatchesSearch(row, query, fields) {
+  if (!query) {
+    return true;
+  }
+  const haystack = fields.map((field) => row[field] ?? "").join(" ").toLowerCase();
+  return haystack.includes(query.toLowerCase());
+}
+
+function optimizationStageRows(rows) {
+  return (rows || []).filter((row) => Object.prototype.hasOwnProperty.call(row, "Stage Group"));
+}
+
+function buildOptimizationImpactOverviewHtml(metricRows, stageRows, unknownRows) {
+  const optimizedStages = optimizationStageRows(stageRows);
+  if (!optimizedStages.length) {
+    return buildMetricSnapshotHtml(metricRows);
+  }
+
+  const originalTotal = asNumber(metricValue(metricRows, "Original SN Total"));
+  const optimizedTotal = asNumber(metricValue(metricRows, "Optimized SN Total"));
+  const reductionTotal = asNumber(metricValue(metricRows, "SN Reduction"));
+  const reductionPct = asNumber(metricValue(metricRows, "SN Reduction Pct"));
+  const boundHits = asNumber(metricValue(metricRows, "Bound Hits"));
+  const scaledSources = asNumber(metricValue(metricRows, "Scaled Sources"));
+  const bestStage = [...optimizedStages].sort(
+    (left, right) =>
+      asNumber(right["Original SN"]) - asNumber(right["Optimized SN"]) -
+      (asNumber(left["Original SN"]) - asNumber(left["Optimized SN"])),
+  )[0];
+  const strongestUnknown = [...(unknownRows || [])]
+    .filter((row) => row.type_key !== "total_special")
+    .sort((left, right) => asNumber(right.reduction) - asNumber(left.reduction))[0];
+  const reviewStage = [...optimizedStages].sort((left, right) => asNumber(left["Reduction Pct"]) - asNumber(right["Reduction Pct"]))[0];
+
+  const insightItems = [
+    {
+      label: "Main driver",
+      value: bestStage?.["Stage Group"] || "-",
+      note: bestStage
+        ? `${formatValue(asNumber(bestStage["Original SN"]) - asNumber(bestStage["Optimized SN"]), "reduction")} SN reduction`
+        : "",
+    },
+    {
+      label: "Largest node-type drop",
+      value: strongestUnknown?.unknown_type || "-",
+      note: strongestUnknown
+        ? `${strongestUnknown.stage_group} decreased by ${formatValue(strongestUnknown.reduction, "reduction")}`
+        : "",
+    },
+    {
+      label: "Constraint pressure",
+      value: boundHits,
+      note: "Optimized coefficients on Cmin or Cmax.",
+    },
+    {
+      label: "Review priority",
+      value: reviewStage?.["Stage Group"] || "-",
+      note: reviewStage ? `${formatValue(reviewStage["Reduction Pct"], "pct")} reduction; inspect low-gain stage first.` : "",
+    },
+  ];
+
+  return `
+    <section class="impact-overview">
+      <div class="impact-hero">
+        <div>
+          <span class="impact-label">Original to First Optimization</span>
+          <div class="impact-flow">
+            <strong>${escapeHtml(formatValue(originalTotal, "value"))}</strong>
+            <span>to</span>
+            <strong>${escapeHtml(formatValue(optimizedTotal, "value"))}</strong>
+          </div>
+          <p>${escapeHtml(formatValue(reductionTotal, "value"))} lower SN mass, ${escapeHtml(formatValue(reductionPct, "pct"))} reduction across supported stage groups.</p>
+        </div>
+        <div class="impact-score">
+          <span>SN reduction</span>
+          <strong>${escapeHtml(formatValue(reductionPct, "pct"))}</strong>
+          <small>${escapeHtml(formatValue(scaledSources, "value"))} scaled sources in this view</small>
+        </div>
+      </div>
+      <div class="impact-insight-grid">
+        ${insightItems.map((item) => buildFactTileHtml(item)).join("")}
+      </div>
+    </section>
+  `;
+}
+
 function buildMetricSnapshotHtml(rows) {
   if (!rows || !rows.length) {
     return `<div class="order-empty">No rows available for the current selection.</div>`;
@@ -1025,7 +1201,7 @@ function buildMetricSnapshotHtml(rows) {
   const isOptimizationSnapshot = normalizedRows.some((row) => normalizeLabel(row.label) === "supported stage groups");
 
   const highlightLabels = isOptimizationSnapshot
-    ? ["Supported Stage Groups", "SN Reduction", "SN Reduction Pct", "A / B / G / NN Rows"]
+    ? ["Supported Stage Groups", "SN Reduction", "SN Reduction Pct", "c_pp / c_pn / c_np Rows"]
     : ["Unknown Total", "Total Special", "Total Regular", "Structural Sink"];
   const highlightSet = new Set(highlightLabels.map(normalizeLabel));
   const highlights = highlightLabels
@@ -1045,7 +1221,7 @@ function buildMetricSnapshotHtml(rows) {
 
 function buildStageOutcomeCardHtml(row, isOptimizationView) {
   if (isOptimizationView) {
-    const coefficientTotal = ["A Rows", "B Rows", "G Rows", "NN Rows"].reduce(
+    const coefficientTotal = ["c_pp Rows", "c_pn Rows", "c_np Rows"].reduce(
       (sum, key) => sum + (Number(row[key]) || 0),
       0,
     );
@@ -1116,11 +1292,204 @@ function buildStageOutcomeCardHtml(row, isOptimizationView) {
   `;
 }
 
-function buildStageOutcomeCardsHtml(rows) {
+function reductionBadgeHtml(value) {
+  const numeric = asNumber(value);
+  const className = numeric > 0 ? "positive" : numeric < 0 ? "negative" : "neutral";
+  const prefix = numeric > 0 ? "-" : numeric < 0 ? "+" : "";
+  return `<span class="delta-badge ${className}">${escapeHtml(`${prefix}${formatValue(Math.abs(numeric), "reduction")}`)}</span>`;
+}
+
+function inverseChangeBadgeHtml(value, key = "change") {
+  const numeric = asNumber(value);
+  const className = numeric < 0 ? "positive" : numeric > 0 ? "negative" : "neutral";
+  return `<span class="delta-badge ${className}">${escapeHtml(formatSignedChange(numeric, key))}</span>`;
+}
+
+function buildStageComparisonHtml(rows) {
+  const optimizedRows = optimizationStageRows(rows).sort(
+    (left, right) => stageGroupRank(left["Stage Group"]) - stageGroupRank(right["Stage Group"]),
+  );
+  if (!optimizedRows.length) {
+    return "";
+  }
+
+  const maxOriginal = Math.max(...optimizedRows.map((row) => asNumber(row["Original SN"])), 1);
+  return `
+    <section class="stage-comparison-panel">
+      <div class="transition-panel-head">
+        <strong>Stage Group Comparison</strong>
+        <span>Original SN and First Optimization SN are compared side by side for each synchronized S1-S2-S3 style group.</span>
+      </div>
+      <div class="stage-comparison-table-wrap">
+        <table class="data-table stage-comparison-table">
+          <thead>
+            <tr>
+              <th>Stage group</th>
+              <th>Original SN</th>
+              <th>First Optimization SN</th>
+              <th>Reduction</th>
+              <th>Reduction pct</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${optimizedRows
+              .map((row) => {
+                const original = asNumber(row["Original SN"]);
+                const optimized = asNumber(row["Optimized SN"]);
+                const reduction = original - optimized;
+                const originalWidth = Math.max(2, Math.min(100, (original / maxOriginal) * 100));
+                const optimizedWidth = Math.max(2, Math.min(100, (optimized / maxOriginal) * 100));
+                const statusValue = String(row.Status || "Recorded");
+                const statusClass =
+                  normalizeLabel(statusValue) === "success"
+                    ? "positive"
+                    : isPresent(row.Failure)
+                      ? "negative"
+                      : "neutral";
+                return `
+                  <tr>
+                    <th>
+                      <strong>${escapeHtml(row["Stage Group"] || "Stage Group")}</strong>
+                      <small>${escapeHtml(formatValue(row.Countries, "countries"))} countries | ${escapeHtml(formatValue(row["HS Codes"], "HS Codes"))} HS codes</small>
+                    </th>
+                    <td>
+                      <span>${escapeHtml(formatValue(original, "value"))}</span>
+                      <div class="stage-impact-bar stage-impact-bar-original" aria-hidden="true">
+                        <span style="width: ${originalWidth.toFixed(2)}%"></span>
+                      </div>
+                    </td>
+                    <td>
+                      <span>${escapeHtml(formatValue(optimized, "value"))}</span>
+                      <div class="stage-impact-bar stage-impact-bar-optimized" aria-hidden="true">
+                        <span style="width: ${optimizedWidth.toFixed(2)}%"></span>
+                      </div>
+                    </td>
+                    <td>${reductionBadgeHtml(reduction)}</td>
+                    <td>${escapeHtml(formatValue(row["Reduction Pct"], "pct"))}</td>
+                    <td>${buildToneBadge(statusValue, statusClass)}</td>
+                  </tr>
+                `;
+              })
+              .join("")}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
+function buildUnknownBreakdownHtml(rows) {
+  if (!rows || !rows.length) {
+    return `<div class="order-empty">Unknown node breakdown is available when First Optimization publishes synchronized node diagnostics.</div>`;
+  }
+  const grouped = new Map();
+  [...rows]
+    .sort((left, right) => {
+      const stageDiff = stageGroupRank(left.stage_group) - stageGroupRank(right.stage_group);
+      if (stageDiff !== 0) {
+        return stageDiff;
+      }
+      return asNumber(left.type_order) - asNumber(right.type_order);
+    })
+    .forEach((row) => {
+      const key = row.stage_group || "Stage group";
+      if (!grouped.has(key)) {
+        grouped.set(key, []);
+      }
+      grouped.get(key).push(row);
+    });
+
+  const maxValue = Math.max(
+    ...rows.flatMap((row) => [asNumber(row.original_value), asNumber(row.optimized_value)]),
+    1,
+  );
+  const barWidth = (value) => Math.max(1, Math.min(100, (asNumber(value) / maxValue) * 100)).toFixed(2);
+
+  return `
+    <section class="unknown-breakdown-panel">
+      <div class="transition-panel-head">
+        <strong>Unknown Node Breakdown</strong>
+        <span>Each type of special/unknown node is separated so users can see where the optimizer reduced volume and where it moved volume between buckets.</span>
+      </div>
+      <div class="unknown-breakdown-grid">
+        ${Array.from(grouped.entries())
+          .map(([stageGroup, groupRows]) => {
+            const totalRow = groupRows.find((row) => row.type_key === "total_special");
+            const detailRows = groupRows.filter((row) => row.type_key !== "total_special");
+            return `
+              <article class="unknown-breakdown-card">
+                <div class="unknown-breakdown-head">
+                  <div>
+                    <span class="transition-eyebrow">Stage group</span>
+                    <strong>${escapeHtml(stageGroup)}</strong>
+                  </div>
+                  ${totalRow ? reductionBadgeHtml(totalRow.reduction) : ""}
+                </div>
+                <div class="unknown-total-row">
+                  <span>Total special nodes</span>
+                  <strong>${escapeHtml(formatValue(totalRow?.optimized_value ?? 0, "value"))}</strong>
+                  <small>${escapeHtml(formatValue(totalRow?.original_value ?? 0, "value"))} original | ${escapeHtml(formatValue(totalRow?.reduction_pct ?? 0, "pct"))} reduction</small>
+                </div>
+                <div class="unknown-breakdown-table-wrap">
+                  <table class="data-table unknown-breakdown-table">
+                    <thead>
+                      <tr>
+                        <th>Unknown type</th>
+                        <th>Original</th>
+                        <th>Optimized</th>
+                        <th>Change</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${detailRows
+                        .map(
+                          (row) => `
+                            <tr>
+                              <th>
+                                <span class="unknown-node-label">
+                                  <span class="unknown-dot unknown-dot-${escapeHtml(row.type_key || "unknown")}"></span>
+                                  ${escapeHtml(row.unknown_type || "Unknown")}
+                                </span>
+                              </th>
+                              <td>
+                                <span>${escapeHtml(formatValue(row.original_value, "value"))}</span>
+                                <div class="unknown-bar unknown-bar-original" aria-hidden="true"><span style="width: ${barWidth(row.original_value)}%"></span></div>
+                              </td>
+                              <td>
+                                <span>${escapeHtml(formatValue(row.optimized_value, "value"))}</span>
+                                <div class="unknown-bar unknown-bar-optimized" aria-hidden="true"><span style="width: ${barWidth(row.optimized_value)}%"></span></div>
+                              </td>
+                              <td>${reductionBadgeHtml(row.reduction)}</td>
+                            </tr>
+                          `,
+                        )
+                        .join("")}
+                    </tbody>
+                  </table>
+                </div>
+              </article>
+            `;
+          })
+          .join("")}
+      </div>
+    </section>
+  `;
+}
+
+function buildStageOutcomeCardsHtml(rows, unknownRows = []) {
   if (!rows || !rows.length) {
     return `<div class="order-empty">No rows available for the current selection.</div>`;
   }
   const isOptimizationView = Object.prototype.hasOwnProperty.call(rows[0], "Stage Group");
+  if (isOptimizationView) {
+    return `
+      <div class="stage-comparison-stack">
+        ${buildStageComparisonHtml(rows)}
+        ${buildUnknownBreakdownHtml(unknownRows)}
+      </div>
+    `;
+  }
   return `
     <div class="stage-outcome-grid">
       ${rows.map((row) => buildStageOutcomeCardHtml(row, isOptimizationView)).join("")}
@@ -1183,7 +1552,7 @@ function buildParameterOverviewHtml(rows) {
   }
 
   const runtimeRows = ["Data Source", "Result Sync", "Solver"].map((label) => findRowByLabel(normalizedRows, label)).filter(Boolean);
-  const weightRows = ["alpha", "beta_pp", "beta_pn", "beta_np", "beta_nn"].map((label) => findRowByLabel(normalizedRows, label)).filter(Boolean);
+  const weightRows = ["alpha", "beta_pp", "beta_pn", "beta_np"].map((label) => findRowByLabel(normalizedRows, label)).filter(Boolean);
   const boundsRows = ["Bounds", "Source Scaling", "Special Handling", "HS Memo Rules"].map((label) => findRowByLabel(normalizedRows, label)).filter(Boolean);
 
   return `
@@ -1297,10 +1666,9 @@ function buildTransitionCardHtml(row) {
     findItemByLabel(outcomePanel?.items, "Reduction Pct"),
   ].filter(Boolean);
   const coverageFacts = [
-    findItemByLabel(coveragePanel?.items, "A rows"),
-    findItemByLabel(coveragePanel?.items, "B rows"),
-    findItemByLabel(coveragePanel?.items, "G rows"),
-    findItemByLabel(coveragePanel?.items, "NN rows"),
+    findItemByLabel(coveragePanel?.items, "c_pp rows"),
+    findItemByLabel(coveragePanel?.items, "c_pn rows"),
+    findItemByLabel(coveragePanel?.items, "c_np rows"),
     findItemByLabel(coveragePanel?.items, "Total rows"),
   ].filter(Boolean);
   const boundsAndScalingFacts = [
@@ -1351,7 +1719,7 @@ function buildTransitionCardHtml(row) {
         )}
         ${buildStageDiagnosticSectionHtml(
           "Coefficient Coverage",
-          "How many A / B / G / NN rows were emitted for this stage group.",
+          "How many c_pp / c_pn / c_np rows were emitted for this stage group.",
           `<div class="diagnostic-fact-grid diagnostic-fact-grid-compact">${coverageFacts.map((item) => buildFactTileHtml(item)).join("")}</div>`,
         )}
         ${buildStageDiagnosticSectionHtml(
@@ -1398,13 +1766,54 @@ function buildTransitionCardHtml(row) {
   `;
 }
 
-function buildProducerCoefficientSectionsHtml(rows) {
-  if (!rows || !rows.length) {
-    return `<div class="order-empty">Coefficient rows are only available when First Optimization exposes factor outputs.</div>`;
-  }
+function coefficientStageLabel(row) {
+  return row?.transition_display || row?.transition || "Stage group";
+}
 
-  const classSet = new Set(rows.map((row) => row.coefficient_class));
-  const usesAbg = classSet.has("A") || classSet.has("B") || classSet.has("G") || classSet.has("NN");
+function optionList(rows, getter, allLabel, preferredOrder = []) {
+  const order = new Map(preferredOrder.map((value, index) => [value, index]));
+  const values = Array.from(new Set((rows || []).map(getter).filter(Boolean)));
+  values.sort((left, right) => {
+    const leftRank = order.has(left) ? order.get(left) : stageGroupRank(left);
+    const rightRank = order.has(right) ? order.get(right) : stageGroupRank(right);
+    if (leftRank !== rightRank) {
+      return leftRank - rightRank;
+    }
+    return String(left).localeCompare(String(right));
+  });
+  return [{ value: "all", label: allLabel }, ...values.map((value) => ({ value, label: value }))];
+}
+
+function coefficientDeviation(row) {
+  if (!isPresent(row?.coef_value) || !isPresent(row?.recommended_value)) {
+    return null;
+  }
+  return asNumber(row.coef_value) - asNumber(row.recommended_value);
+}
+
+function filteredCoefficientRows(rows) {
+  const filters = state.diagnosticFilters;
+  return (rows || []).filter((row) => {
+    const stage = coefficientStageLabel(row);
+    const coefficientClass = row.coefficient_class || "Unknown";
+    const boundStatus = row.bound_status || "Unknown";
+    const matchesStage = filters.coefficientStage === "all" || stage === filters.coefficientStage;
+    const matchesClass = filters.coefficientClass === "all" || coefficientClass === filters.coefficientClass;
+    const matchesBound = filters.coefficientBound === "all" || boundStatus === filters.coefficientBound;
+    const matchesSearch = rowMatchesSearch(row, filters.coefficientSearch, [
+      "transition_display",
+      "transition",
+      "hs_code",
+      "coefficient_class",
+      "producer_scope",
+      "partner_scope",
+      "bound_status",
+    ]);
+    return matchesStage && matchesClass && matchesBound && matchesSearch;
+  });
+}
+
+function buildCoefficientIntroHtml(rows, visibleRows) {
   const classCounts = rows.reduce((accumulator, row) => {
     const key = row.coefficient_class || "Unknown";
     accumulator[key] = (accumulator[key] || 0) + 1;
@@ -1415,8 +1824,8 @@ function buildProducerCoefficientSectionsHtml(rows) {
     accumulator[key] = (accumulator[key] || 0) + 1;
     return accumulator;
   }, {});
-  const transitionCounts = rows.reduce((accumulator, row) => {
-    const key = row.transition_display || row.transition || "Transition";
+  const stageCounts = rows.reduce((accumulator, row) => {
+    const key = coefficientStageLabel(row);
     accumulator[key] = (accumulator[key] || 0) + 1;
     return accumulator;
   }, {});
@@ -1425,11 +1834,9 @@ function buildProducerCoefficientSectionsHtml(rows) {
     if (!currentMax) {
       return row;
     }
-    return Number(row.exposure) > Number(currentMax.exposure) ? row : currentMax;
+    return asNumber(row.exposure) > asNumber(currentMax.exposure) ? row : currentMax;
   }, null);
-  const busiestTransition = Object.entries(transitionCounts).sort((left, right) => right[1] - left[1])[0];
-  const classOrder = usesAbg ? ["A", "B", "G", "NN"] : ["PP", "PN", "NP"];
-  const classSummary = classOrder
+  const classSummary = ["c_pp", "c_pn", "c_np", "PP", "PN", "NP"]
     .filter((label) => classCounts[label])
     .map((label) => `${label} ${classCounts[label]}`)
     .join(" | ");
@@ -1437,146 +1844,399 @@ function buildProducerCoefficientSectionsHtml(rows) {
     .filter((label) => boundCounts[label])
     .map((label) => `${label} ${boundCounts[label]}`)
     .join(" | ");
-  const introText = usesAbg
-    ? "First Optimization exposes the synchronized coefficient output directly. Summary cards stay visible above the scrollable HS tables so the overall picture is readable before drilling down."
-    : "First Optimization keeps producer-linked coefficients grouped by stage first and then by HS code. The overview cards summarize the active coefficient footprint before the detailed tables.";
+  const busiestStage = Object.entries(stageCounts).sort((left, right) => right[1] - left[1])[0];
   const summaryItems = [
-    { label: "Coefficient Rows", value: rows.length, note: "All coefficient rows visible for the current selection." },
-    { label: "Stage Groups", value: Object.keys(transitionCounts).length, note: busiestTransition ? `${busiestTransition[0]} is the largest group with ${busiestTransition[1]} rows.` : "" },
-    { label: "HS Codes", value: uniqueHsCodes.size, note: "Unique HS codes represented across all grouped coefficient tables." },
-    { label: "Class Mix", value: classSummary || "-", note: usesAbg ? "A / B / G / NN rows split by optimizer role." : "Producer-linked coefficient classes in this synchronized export." },
-    { label: "Bound Status Mix", value: boundSummary || "-", note: "Interior rows stay away from bounds; Lower and Upper rows sit on Cmin or Cmax." },
+    { label: "Visible Rows", value: visibleRows.length, note: `${rows.length} total coefficient rows in this First Optimization export.` },
+    { label: "Stage Groups", value: Object.keys(stageCounts).length, note: busiestStage ? `${busiestStage[0]} has ${busiestStage[1]} coefficient rows.` : "" },
+    { label: "HS Codes", value: uniqueHsCodes.size, note: "Unique HS codes represented by the optimizer coefficient output." },
+    { label: "Class Mix", value: classSummary || "-", note: "c_pp / c_pn / c_np identify how the row participates in the balance equations." },
+    { label: "Bound Status Mix", value: boundSummary || "-", note: "Lower and Upper rows sit on Cmin or Cmax; Interior rows remain inside bounds." },
     largestExposureRow
       ? {
           label: "Largest Exposure Row",
           value: largestExposureRow.exposure,
-          note: `${largestExposureRow.transition_display || largestExposureRow.transition || "Transition"} | ${largestExposureRow.hs_code || "Unknown"} | ${largestExposureRow.producer_scope || "Unknown"} -> ${largestExposureRow.partner_scope || "Unknown"}`,
+          note: `${coefficientStageLabel(largestExposureRow)} | ${largestExposureRow.hs_code || "Unknown"} | ${largestExposureRow.producer_scope || "Unknown"} -> ${largestExposureRow.partner_scope || "Unknown"}`,
         }
       : null,
   ].filter(Boolean);
-  const intro = usesAbg
-    ? `
-      <section class="producer-coefficient-intro">
-        <p>${escapeHtml(introText)}</p>
-        <div class="producer-summary-grid">
-          ${summaryItems.map((item) => buildFactTileHtml(item)).join("")}
-        </div>
-        <div class="producer-legend-grid">
-          <article class="producer-legend-item">
-            <strong>A</strong>
-            <span>Edge-level coefficient on a source-country to target-country trade row.</span>
-          </article>
-          <article class="producer-legend-item">
-            <strong>B</strong>
-            <span>Source-side balance coefficient tied to the exporting country for that HS code.</span>
-          </article>
-          <article class="producer-legend-item">
-            <strong>G</strong>
-            <span>Target-side balance coefficient tied to the importing country for that HS code.</span>
-          </article>
-          <article class="producer-legend-item">
-            <strong>NN</strong>
-            <span>Exporter-level coefficient for target-country exporters sending this HS code onward to non-target destinations.</span>
-          </article>
-          <article class="producer-legend-item">
-            <strong>Exposure</strong>
-            <span>The raw trade quantity attached to that coefficient row in the selected case.</span>
-          </article>
-          <article class="producer-legend-item">
-            <strong>Exposure Share</strong>
-            <span>The row exposure divided by the total raw trade quantity for that stage-triplet and HS code.</span>
-          </article>
-        </div>
-      </section>
-    `
-    : `
-      <section class="producer-coefficient-intro">
-        <p>${escapeHtml(introText)}</p>
-        <div class="producer-summary-grid">
-          ${summaryItems.map((item) => buildFactTileHtml(item)).join("")}
-        </div>
-        <div class="producer-legend-grid">
-          <article class="producer-legend-item">
-            <strong>PP</strong>
-            <span>Producer -> Producer. A pair-specific coefficient for a source producer shipping to a target producer.</span>
-          </article>
-          <article class="producer-legend-item">
-            <strong>PN</strong>
-            <span>Producer -> Non-producer. One shared coefficient for a source producer shipping this HS code to all non-target producers.</span>
-          </article>
-          <article class="producer-legend-item">
-            <strong>NP</strong>
-            <span>Non-producer -> Producer. One shared coefficient for a target producer receiving this HS code from all non-source exporters.</span>
-          </article>
-          <article class="producer-legend-item">
-            <strong>Exposure</strong>
-            <span>The raw import volume governed by that coefficient in the selected year.</span>
-          </article>
-          <article class="producer-legend-item">
-            <strong>Exposure Share</strong>
-            <span>The coefficient exposure divided by the total raw trade volume of that transition-HS series in the selected year.</span>
-          </article>
-        </div>
-      </section>
-    `;
 
-  const stageGroups = new Map();
-  rows.forEach((row) => {
-    const stageKey = row.transition_display || row.transition || "Transition";
-    if (!stageGroups.has(stageKey)) {
-      stageGroups.set(stageKey, new Map());
+  return `
+    <section class="producer-coefficient-intro">
+      <p>First Optimization chooses coefficients within Cmin/Cmax while minimizing unknown-node mass and weighted movement away from the recommended value. Use the filters to inspect one coefficient row, then compare its stage with the trade flows below.</p>
+      <div class="producer-summary-grid">
+        ${summaryItems.map((item) => buildFactTileHtml(item)).join("")}
+      </div>
+      <div class="producer-legend-grid">
+        <article class="producer-legend-item">
+          <strong>Recommended</strong>
+          <span>The optimizer's reference coefficient before movement penalties are applied.</span>
+        </article>
+        <article class="producer-legend-item">
+          <strong>Cmin / Cmax</strong>
+          <span>The lower and upper bounds that keep the coefficient inside the published constraint range.</span>
+        </article>
+        <article class="producer-legend-item">
+          <strong>Exposure</strong>
+          <span>The raw trade quantity attached to this coefficient row in the selected stage group and HS code.</span>
+        </article>
+      </div>
+    </section>
+  `;
+}
+
+function buildCoefficientDetailHtml(row, tradeRows) {
+  if (!row) {
+    return `
+      <aside class="explorer-detail">
+        <div class="order-empty">No coefficient rows match the active filters.</div>
+      </aside>
+    `;
+  }
+
+  const deviation = coefficientDeviation(row);
+  const lower = asNumber(row.lower_bound);
+  const upper = asNumber(row.upper_bound);
+  const recommended = asNumber(row.recommended_value);
+  const coefficient = asNumber(row.coef_value);
+  const hasRange = isPresent(row.lower_bound) && isPresent(row.upper_bound) && Math.abs(upper - lower) > 1e-12;
+  const coefPosition = hasRange ? Math.max(0, Math.min(100, ((coefficient - lower) / (upper - lower)) * 100)) : 0;
+  const recommendedPosition = hasRange ? Math.max(0, Math.min(100, ((recommended - lower) / (upper - lower)) * 100)) : 0;
+  const stageGroup = coefficientStageLabel(row);
+  const relatedFlows = (tradeRows || [])
+    .filter((flow) => flow.stage_group === stageGroup)
+    .slice(0, 5);
+
+  return `
+    <aside class="explorer-detail">
+      <div class="explorer-detail-head">
+        <div>
+          <span class="transition-eyebrow">Selected coefficient</span>
+          <strong>${escapeHtml(row.coefficient_class || "Coefficient")} | ${escapeHtml(row.hs_code || "Unknown HS")}</strong>
+          <small>${escapeHtml(stageGroup)} | ${escapeHtml(row.producer_scope || "Unknown")} -> ${escapeHtml(row.partner_scope || "Unknown")}</small>
+        </div>
+        ${buildToneBadge(row.bound_status || "Unknown", row.bound_status || "neutral")}
+      </div>
+      <div class="coefficient-range">
+        <div class="coefficient-range-track" aria-hidden="true">
+          <span class="coefficient-range-rec" style="left: ${recommendedPosition.toFixed(2)}%"></span>
+          <span class="coefficient-range-value" style="left: ${coefPosition.toFixed(2)}%"></span>
+        </div>
+        <div class="coefficient-range-labels">
+          <span>Cmin ${escapeHtml(formatValue(row.lower_bound, "coefficient"))}</span>
+          <span>Recommended ${escapeHtml(formatValue(row.recommended_value, "coefficient"))}</span>
+          <span>Cmax ${escapeHtml(formatValue(row.upper_bound, "coefficient"))}</span>
+        </div>
+      </div>
+      <div class="diagnostic-fact-grid diagnostic-fact-grid-compact">
+        ${[
+          { label: "Optimized Coefficient", value: row.coef_value },
+          { label: "Delta From Recommended", value: deviation ?? "-", note: "Optimized value minus recommended coefficient." },
+          { label: "Exposure", value: row.exposure },
+          { label: "Exposure Share", value: row.exposure_share },
+        ]
+          .map((item) => buildFactTileHtml(item))
+          .join("")}
+      </div>
+      <div class="related-flow-list">
+        <div class="transition-panel-head">
+          <strong>Related Stage Flow Changes</strong>
+          <span>Largest flow changes in the same stage group.</span>
+        </div>
+        ${relatedFlows.length
+          ? `
+            <table class="data-table related-flow-table">
+              <tbody>
+                ${relatedFlows
+                  .map(
+                    (flow) => `
+                      <tr>
+                        <th>${escapeHtml(flow.source_label || "Source")} -> ${escapeHtml(flow.target_label || "Target")}</th>
+                        <td>${inverseChangeBadgeHtml(flow.change)}</td>
+                      </tr>
+                    `,
+                  )
+                  .join("")}
+              </tbody>
+            </table>
+          `
+          : `<div class="order-empty">No matching trade-flow comparison rows are available for this stage group.</div>`}
+      </div>
+    </aside>
+  `;
+}
+
+function buildProducerCoefficientSectionsHtml(rows, tradeRows = []) {
+  if (!rows || !rows.length) {
+    return `<div class="order-empty">Coefficient rows are only available when First Optimization exposes factor outputs.</div>`;
+  }
+
+  const visibleRows = filteredCoefficientRows(rows);
+  const selectedRow =
+    visibleRows.find((row) => coefficientRowKey(row) === state.diagnosticFilters.selectedCoefficientKey) ||
+    visibleRows[0] ||
+    rows[0];
+  if (selectedRow) {
+    state.diagnosticFilters.selectedCoefficientKey = coefficientRowKey(selectedRow);
+  }
+
+  const stageOptions = optionList(rows, coefficientStageLabel, "All stages", ["S1-S2-S3", "S3-S4-S5", "S5-S6-S7"]);
+  const classOptions = optionList(rows, (row) => row.coefficient_class || "Unknown", "All classes", ["c_pp", "c_pn", "c_np", "PP", "PN", "NP"]);
+  const boundOptions = optionList(rows, (row) => row.bound_status || "Unknown", "All bounds", ["Lower", "Upper", "Interior"]);
+  const tableRows = visibleRows.slice(0, 120);
+  const hiddenCount = Math.max(0, visibleRows.length - tableRows.length);
+
+  return `
+    <section class="explorer-shell coefficient-explorer">
+      ${buildCoefficientIntroHtml(rows, visibleRows)}
+      <div class="explorer-toolbar">
+        <label class="explorer-search">
+          <span>Find coefficient</span>
+          <input id="coefficient-search" type="search" value="${escapeHtml(state.diagnosticFilters.coefficientSearch)}" placeholder="HS code, class, country, bound status" />
+        </label>
+        <div class="explorer-filter-stack">
+          <div>
+            <span>Stage</span>
+            ${buildFilterButtons("coefficientStage", stageOptions, state.diagnosticFilters.coefficientStage)}
+          </div>
+          <div>
+            <span>Class</span>
+            ${buildFilterButtons("coefficientClass", classOptions, state.diagnosticFilters.coefficientClass)}
+          </div>
+          <div>
+            <span>Bound</span>
+            ${buildFilterButtons("coefficientBound", boundOptions, state.diagnosticFilters.coefficientBound)}
+          </div>
+        </div>
+      </div>
+      <div class="explorer-layout">
+        <div class="explorer-table-wrap">
+          <table class="data-table explorer-table">
+            <thead>
+              <tr>
+                <th>Coefficient</th>
+                <th>HS code</th>
+                <th>Scope</th>
+                <th>Optimized</th>
+                <th>Recommended</th>
+                <th>Bound</th>
+                <th>Exposure</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              ${tableRows
+                .map((row) => {
+                  const rowKey = coefficientRowKey(row);
+                  const isSelected = rowKey === state.diagnosticFilters.selectedCoefficientKey;
+                  const deviation = coefficientDeviation(row);
+                  return `
+                    <tr class="${isSelected ? "is-selected" : ""}">
+                      <th>
+                        <strong>${escapeHtml(row.coefficient_class || "Coefficient")}</strong>
+                        <small>${escapeHtml(coefficientStageLabel(row))}</small>
+                      </th>
+                      <td>${escapeHtml(row.hs_code || "Unknown")}</td>
+                      <td>
+                        <span>${escapeHtml(row.producer_scope || "Unknown")}</span>
+                        <small>${escapeHtml(row.partner_scope || "Unknown")}</small>
+                      </td>
+                      <td>
+                        <strong>${escapeHtml(formatValue(row.coef_value, "coefficient"))}</strong>
+                        <small>${deviation === null ? "" : escapeHtml(formatSignedChange(deviation, "coefficient"))}</small>
+                      </td>
+                      <td>${escapeHtml(formatValue(row.recommended_value, "coefficient"))}</td>
+                      <td>${buildToneBadge(row.bound_status || "Unknown", row.bound_status || "neutral")}</td>
+                      <td>${escapeHtml(formatValue(row.exposure, "exposure"))}</td>
+                      <td><button type="button" class="row-action${isSelected ? " active" : ""}" data-coefficient-key="${escapeHtml(rowKey)}">View</button></td>
+                    </tr>
+                  `;
+                })
+                .join("")}
+            </tbody>
+          </table>
+          ${hiddenCount ? `<div class="explorer-footnote">${escapeHtml(`${hiddenCount} more matching rows are hidden. Refine filters or search to narrow the list.`)}</div>` : ""}
+        </div>
+        ${buildCoefficientDetailHtml(selectedRow, tradeRows)}
+      </div>
+    </section>
+  `;
+}
+
+function tradeStatusTone(status) {
+  const normalized = normalizeLabel(status);
+  if (normalized === "reduced" || normalized === "removed") {
+    return "positive";
+  }
+  if (normalized === "increased" || normalized === "new") {
+    return "negative";
+  }
+  return "neutral";
+}
+
+function filteredTradeRows(rows) {
+  const filters = state.diagnosticFilters;
+  return (rows || []).filter((row) => {
+    const matchesStage = filters.tradeStage === "all" || row.stage_group === filters.tradeStage;
+    const matchesStatus = filters.tradeStatus === "all" || row.status === filters.tradeStatus;
+    const matchesSearch = rowMatchesSearch(row, filters.tradeSearch, [
+      "stage_group",
+      "source_stage",
+      "target_stage",
+      "source_label",
+      "target_label",
+      "flow_type",
+      "status",
+    ]);
+    return matchesStage && matchesStatus && matchesSearch;
+  });
+}
+
+function buildTradeFlowExplorerHtml(rows) {
+  if (!rows || !rows.length) {
+    return `<div class="order-empty">Trade-flow comparison is available when Original and First Optimization link exports are both present.</div>`;
+  }
+
+  const visibleRows = filteredTradeRows(rows);
+  const stageOptions = optionList(rows, (row) => row.stage_group || "Other", "All stages", ["S1-S2-S3", "S3-S4-S5", "S5-S6-S7", "Other"]);
+  const statusOptions = optionList(rows, (row) => row.status || "Unknown", "All statuses", ["Reduced", "Increased", "Removed", "New", "Flat"]);
+  const reducedVolume = visibleRows.reduce((sum, row) => sum + Math.max(0, asNumber(row.reduction)), 0);
+  const increasedVolume = visibleRows.reduce((sum, row) => sum + Math.max(0, asNumber(row.change)), 0);
+  const specialCount = visibleRows.filter((row) => row.flow_type !== "Country flow").length;
+  const tableRows = visibleRows.slice(0, 160);
+  const hiddenCount = Math.max(0, visibleRows.length - tableRows.length);
+
+  return `
+    <section class="explorer-shell trade-flow-explorer">
+      <div class="trade-flow-summary">
+        ${[
+          { label: "Visible Flows", value: visibleRows.length, note: `${rows.length} total flow comparison rows.` },
+          { label: "Reduced Volume", value: reducedVolume, note: "Sum of positive Original minus Optimized changes in the active filter." },
+          { label: "Increased Volume", value: increasedVolume, note: "Sum of positive Optimized minus Original changes in the active filter." },
+          { label: "Unknown / Special Flows", value: specialCount, note: "Rows involving Unknown, Non-source, Non-target, or other special nodes." },
+        ]
+          .map((item) => buildFactTileHtml(item))
+          .join("")}
+      </div>
+      <div class="explorer-toolbar">
+        <label class="explorer-search">
+          <span>Find trade flow</span>
+          <input id="trade-search" type="search" value="${escapeHtml(state.diagnosticFilters.tradeSearch)}" placeholder="Source, target, stage, status" />
+        </label>
+        <div class="explorer-filter-stack">
+          <div>
+            <span>Stage</span>
+            ${buildFilterButtons("tradeStage", stageOptions, state.diagnosticFilters.tradeStage)}
+          </div>
+          <div>
+            <span>Status</span>
+            ${buildFilterButtons("tradeStatus", statusOptions, state.diagnosticFilters.tradeStatus)}
+          </div>
+        </div>
+      </div>
+      <div class="explorer-table-wrap">
+        <table class="data-table explorer-table trade-flow-table">
+          <thead>
+            <tr>
+              <th>Stage</th>
+              <th>Flow</th>
+              <th>Type</th>
+              <th>Original</th>
+              <th>First Optimization</th>
+              <th>Change</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${tableRows
+              .map(
+                (row) => `
+                  <tr>
+                    <th>
+                      <strong>${escapeHtml(row.stage_group || "Other")}</strong>
+                      <small>${escapeHtml(row.source_stage || "?")} -> ${escapeHtml(row.target_stage || "?")}</small>
+                    </th>
+                    <td>
+                      <span>${escapeHtml(row.source_label || "Source")}</span>
+                      <small>${escapeHtml(row.target_label || "Target")}</small>
+                    </td>
+                    <td>${escapeHtml(row.flow_type || "Country flow")}</td>
+                    <td>${escapeHtml(formatValue(row.original_value, "value"))}</td>
+                    <td>${escapeHtml(formatValue(row.optimized_value, "value"))}</td>
+                    <td>${inverseChangeBadgeHtml(row.change)}</td>
+                    <td>${buildToneBadge(row.status || "Flat", tradeStatusTone(row.status || "Flat"))}</td>
+                  </tr>
+                `,
+              )
+              .join("")}
+          </tbody>
+        </table>
+        ${hiddenCount ? `<div class="explorer-footnote">${escapeHtml(`${hiddenCount} more matching flows are hidden. Refine filters or search to narrow the list.`)}</div>` : ""}
+      </div>
+    </section>
+  `;
+}
+
+function renderDiagnosticExplorerSections(focusId = "") {
+  const tables = state.currentTables || {};
+  const producerHost = document.getElementById("producer-coefficient-table");
+  const tradeHost = document.getElementById("trade-flow-table");
+  if (producerHost) {
+    producerHost.innerHTML = buildProducerCoefficientSectionsHtml(tables.producerCoefficients || [], tables.tradeFlows || []);
+  }
+  if (tradeHost) {
+    tradeHost.innerHTML = buildTradeFlowExplorerHtml(tables.tradeFlows || []);
+  }
+  bindDiagnosticExplorerControls();
+  if (focusId) {
+    const focusTarget = document.getElementById(focusId);
+    if (focusTarget) {
+      focusTarget.focus();
+      if (typeof focusTarget.setSelectionRange === "function") {
+        const end = focusTarget.value.length;
+        focusTarget.setSelectionRange(end, end);
+      }
     }
-    const hsKey = row.hs_code || "Unknown";
-    const hsGroups = stageGroups.get(stageKey);
-    if (!hsGroups.has(hsKey)) {
-      hsGroups.set(hsKey, []);
-    }
-    hsGroups.get(hsKey).push(row);
+  }
+}
+
+function bindDiagnosticExplorerControls() {
+  document.querySelectorAll("[data-filter]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const filterKey = button.dataset.filter;
+      if (!filterKey || !(filterKey in state.diagnosticFilters)) {
+        return;
+      }
+      state.diagnosticFilters[filterKey] = button.dataset.value || "all";
+      if (filterKey.startsWith("coefficient")) {
+        state.diagnosticFilters.selectedCoefficientKey = "";
+      }
+      renderDiagnosticExplorerSections();
+    });
   });
 
-  const sections = Array.from(stageGroups.entries())
-    .map(([transition, hsGroups]) => {
-      const hsTables = Array.from(hsGroups.entries())
-        .map(([hsCode, hsRows]) => `
-          <article class="producer-subtable">
-            <div class="producer-subtable-head">
-              <strong>${escapeHtml(hsCode)}</strong>
-              <span>${escapeHtml(`${hsRows.length} coefficient row${hsRows.length === 1 ? "" : "s"}`)}</span>
-            </div>
-            <div class="producer-coefficient-scroll">
-              ${buildTableHtml(
-                hsRows.map((row) => ({
-                  Class: row.coefficient_class,
-                  "Producer Scope": row.producer_scope,
-                  "Partner Scope": row.partner_scope,
-                  Coefficient: row.coef_value,
-                  Bounds: row.bounds,
-                  "Bound Status": row.bound_status,
-                  Exposure: row.exposure,
-                  "Exposure Share": row.exposure_share,
-                })),
-              )}
-            </div>
-          </article>
-        `)
-        .join("");
+  document.querySelectorAll("[data-coefficient-key]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.diagnosticFilters.selectedCoefficientKey = button.dataset.coefficientKey || "";
+      renderDiagnosticExplorerSections();
+    });
+  });
 
-      const rowCount = Array.from(hsGroups.values()).reduce((sum, value) => sum + value.length, 0);
-      return `
-        <section class="transition-group producer-coefficient-group">
-          <div class="transition-group-head">
-            <strong>${escapeHtml(transition)}</strong>
-            <span>${escapeHtml(`${hsGroups.size} HS code${hsGroups.size === 1 ? "" : "s"} | ${rowCount} coefficient row${rowCount === 1 ? "" : "s"}`)}</span>
-          </div>
-          <div class="producer-subtable-grid">
-            ${hsTables}
-          </div>
-        </section>
-      `;
-    })
-    .join("");
+  const coefficientSearch = document.getElementById("coefficient-search");
+  if (coefficientSearch) {
+    coefficientSearch.addEventListener("input", (event) => {
+      state.diagnosticFilters.coefficientSearch = event.target.value;
+      state.diagnosticFilters.selectedCoefficientKey = "";
+      renderDiagnosticExplorerSections("coefficient-search");
+    });
+  }
 
-  return `${intro}${sections}`;
+  const tradeSearch = document.getElementById("trade-search");
+  if (tradeSearch) {
+    tradeSearch.addEventListener("input", (event) => {
+      state.diagnosticFilters.tradeSearch = event.target.value;
+      renderDiagnosticExplorerSections("trade-search");
+    });
+  }
 }
 
 function buildTransitionCardsHtml(rows) {
@@ -1591,24 +2251,28 @@ function buildTransitionCardsHtml(rows) {
 }
 
 function renderTables(tables) {
+  state.currentTables = tables || {};
   const board = document.getElementById("data-board");
   board.classList.toggle("is-hidden", state.accessMode !== "analyst");
   if (state.accessMode !== "analyst") {
     return;
   }
-  const metricRows = tables.metrics || [];
-  const stageRows = tables.stages || [];
-  const parameterRows = tables.parameters || [];
-  const producerCoefficientRows = tables.producerCoefficients || [];
+  const metricRows = state.currentTables.metrics || [];
+  const stageRows = state.currentTables.stages || [];
+  const parameterRows = state.currentTables.parameters || [];
+  const unknownBreakdownRows = state.currentTables.unknownBreakdown || [];
+  const isOptimizationStageView = stageRows.length && Object.prototype.hasOwnProperty.call(stageRows[0], "Stage Group");
   document.getElementById("metrics-table").innerHTML =
     metricRows.length && (Object.prototype.hasOwnProperty.call(metricRows[0], "Metric") || Object.prototype.hasOwnProperty.call(metricRows[0], "metric"))
-      ? buildMetricSnapshotHtml(metricRows)
+      ? isOptimizationStageView
+        ? buildOptimizationImpactOverviewHtml(metricRows, stageRows, unknownBreakdownRows)
+        : buildMetricSnapshotHtml(metricRows)
       : metricRows.length && Object.prototype.hasOwnProperty.call(metricRows[0], "baseline")
         ? buildCompareMetricsTableHtml(metricRows)
         : buildTableHtml(metricRows);
   document.getElementById("stage-table").innerHTML =
     stageRows.length && (Object.prototype.hasOwnProperty.call(stageRows[0], "Stage Group") || Object.prototype.hasOwnProperty.call(stageRows[0], "stage"))
-      ? buildStageOutcomeCardsHtml(stageRows)
+      ? buildStageOutcomeCardsHtml(stageRows, unknownBreakdownRows)
       : stageRows.length && Object.prototype.hasOwnProperty.call(stageRows[0], "baseline_unknown")
         ? buildCompareStageTableHtml(stageRows)
         : buildTableHtml(stageRows);
@@ -1618,13 +2282,7 @@ function renderTables(tables) {
       : parameterRows.length && Object.prototype.hasOwnProperty.call(parameterRows[0], "baseline")
         ? buildCompareParameterTableHtml(parameterRows)
         : buildTableHtml(parameterRows);
-  document.getElementById("producer-coefficient-table").innerHTML = buildProducerCoefficientSectionsHtml(producerCoefficientRows);
-  document.getElementById("transition-table").innerHTML = buildTransitionCardsHtml(tables.transitions);
-  document.getElementById("transition-note").textContent =
-    tables.transitionNote ||
-    (tables.transitions?.length
-      ? "Stage diagnostics summarize each synchronized stage triplet without forcing the overview into wide tables."
-      : "Stage diagnostics are only populated when First Optimization exposes synchronized optimizer outputs.");
+  renderDiagnosticExplorerSections();
 }
 
 async function bootstrap() {

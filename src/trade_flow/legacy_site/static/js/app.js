@@ -457,7 +457,7 @@ async function loadFigure() {
         ? "Diagnostics are hidden in guest mode."
       : state.resultMode === "baseline"
         ? `Diagnostics: Original only. Switch to First Optimization for optimizer-stage summaries.`
-        : `Diagnostics: ${resultModeLabel(payload.resultMode)} stage summaries, bounds, source scaling, and A/B/G/NN coefficients.`;
+        : `Diagnostics: ${resultModeLabel(payload.resultMode)} stage summaries, bounds, source scaling, and c_pp/c_pn/c_np coefficients.`;
   state.lastChartHeight = Number(payload.figure?.layout?.height || 0);
   await renderChartFigure(payload.figure);
   if (renderToken !== figureRenderToken) {
@@ -1025,7 +1025,7 @@ function buildMetricSnapshotHtml(rows) {
   const isOptimizationSnapshot = normalizedRows.some((row) => normalizeLabel(row.label) === "supported stage groups");
 
   const highlightLabels = isOptimizationSnapshot
-    ? ["Supported Stage Groups", "SN Reduction", "SN Reduction Pct", "A / B / G / NN Rows"]
+    ? ["Supported Stage Groups", "SN Reduction", "SN Reduction Pct", "c_pp / c_pn / c_np Rows"]
     : ["Unknown Total", "Total Special", "Total Regular", "Structural Sink"];
   const highlightSet = new Set(highlightLabels.map(normalizeLabel));
   const highlights = highlightLabels
@@ -1045,7 +1045,7 @@ function buildMetricSnapshotHtml(rows) {
 
 function buildStageOutcomeCardHtml(row, isOptimizationView) {
   if (isOptimizationView) {
-    const coefficientTotal = ["A Rows", "B Rows", "G Rows", "NN Rows"].reduce(
+    const coefficientTotal = ["c_pp Rows", "c_pn Rows", "c_np Rows"].reduce(
       (sum, key) => sum + (Number(row[key]) || 0),
       0,
     );
@@ -1183,7 +1183,7 @@ function buildParameterOverviewHtml(rows) {
   }
 
   const runtimeRows = ["Data Source", "Result Sync", "Solver"].map((label) => findRowByLabel(normalizedRows, label)).filter(Boolean);
-  const weightRows = ["alpha", "beta_pp", "beta_pn", "beta_np", "beta_nn"].map((label) => findRowByLabel(normalizedRows, label)).filter(Boolean);
+  const weightRows = ["alpha", "beta_pp", "beta_pn", "beta_np"].map((label) => findRowByLabel(normalizedRows, label)).filter(Boolean);
   const boundsRows = ["Bounds", "Source Scaling", "Special Handling", "HS Memo Rules"].map((label) => findRowByLabel(normalizedRows, label)).filter(Boolean);
 
   return `
@@ -1297,10 +1297,9 @@ function buildTransitionCardHtml(row) {
     findItemByLabel(outcomePanel?.items, "Reduction Pct"),
   ].filter(Boolean);
   const coverageFacts = [
-    findItemByLabel(coveragePanel?.items, "A rows"),
-    findItemByLabel(coveragePanel?.items, "B rows"),
-    findItemByLabel(coveragePanel?.items, "G rows"),
-    findItemByLabel(coveragePanel?.items, "NN rows"),
+    findItemByLabel(coveragePanel?.items, "c_pp rows"),
+    findItemByLabel(coveragePanel?.items, "c_pn rows"),
+    findItemByLabel(coveragePanel?.items, "c_np rows"),
     findItemByLabel(coveragePanel?.items, "Total rows"),
   ].filter(Boolean);
   const boundsAndScalingFacts = [
@@ -1351,7 +1350,7 @@ function buildTransitionCardHtml(row) {
         )}
         ${buildStageDiagnosticSectionHtml(
           "Coefficient Coverage",
-          "How many A / B / G / NN rows were emitted for this stage group.",
+          "How many c_pp / c_pn / c_np rows were emitted for this stage group.",
           `<div class="diagnostic-fact-grid diagnostic-fact-grid-compact">${coverageFacts.map((item) => buildFactTileHtml(item)).join("")}</div>`,
         )}
         ${buildStageDiagnosticSectionHtml(
@@ -1404,7 +1403,7 @@ function buildProducerCoefficientSectionsHtml(rows) {
   }
 
   const classSet = new Set(rows.map((row) => row.coefficient_class));
-  const usesAbg = classSet.has("A") || classSet.has("B") || classSet.has("G") || classSet.has("NN");
+  const usesAbg = classSet.has("c_pp") || classSet.has("c_pn") || classSet.has("c_np");
   const classCounts = rows.reduce((accumulator, row) => {
     const key = row.coefficient_class || "Unknown";
     accumulator[key] = (accumulator[key] || 0) + 1;
@@ -1428,7 +1427,7 @@ function buildProducerCoefficientSectionsHtml(rows) {
     return Number(row.exposure) > Number(currentMax.exposure) ? row : currentMax;
   }, null);
   const busiestTransition = Object.entries(transitionCounts).sort((left, right) => right[1] - left[1])[0];
-  const classOrder = usesAbg ? ["A", "B", "G", "NN"] : ["PP", "PN", "NP"];
+  const classOrder = usesAbg ? ["c_pp", "c_pn", "c_np"] : ["PP", "PN", "NP"];
   const classSummary = classOrder
     .filter((label) => classCounts[label])
     .map((label) => `${label} ${classCounts[label]}`)
@@ -1444,7 +1443,7 @@ function buildProducerCoefficientSectionsHtml(rows) {
     { label: "Coefficient Rows", value: rows.length, note: "All coefficient rows visible for the current selection." },
     { label: "Stage Groups", value: Object.keys(transitionCounts).length, note: busiestTransition ? `${busiestTransition[0]} is the largest group with ${busiestTransition[1]} rows.` : "" },
     { label: "HS Codes", value: uniqueHsCodes.size, note: "Unique HS codes represented across all grouped coefficient tables." },
-    { label: "Class Mix", value: classSummary || "-", note: usesAbg ? "A / B / G / NN rows split by optimizer role." : "Producer-linked coefficient classes in this synchronized export." },
+    { label: "Class Mix", value: classSummary || "-", note: usesAbg ? "c_pp / c_pn / c_np rows split by optimizer role." : "Producer-linked coefficient classes in this synchronized export." },
     { label: "Bound Status Mix", value: boundSummary || "-", note: "Interior rows stay away from bounds; Lower and Upper rows sit on Cmin or Cmax." },
     largestExposureRow
       ? {
@@ -1463,20 +1462,16 @@ function buildProducerCoefficientSectionsHtml(rows) {
         </div>
         <div class="producer-legend-grid">
           <article class="producer-legend-item">
-            <strong>A</strong>
+            <strong>c_pp</strong>
             <span>Edge-level coefficient on a source-country to target-country trade row.</span>
           </article>
           <article class="producer-legend-item">
-            <strong>B</strong>
+            <strong>c_pn</strong>
             <span>Source-side balance coefficient tied to the exporting country for that HS code.</span>
           </article>
           <article class="producer-legend-item">
-            <strong>G</strong>
+            <strong>c_np</strong>
             <span>Target-side balance coefficient tied to the importing country for that HS code.</span>
-          </article>
-          <article class="producer-legend-item">
-            <strong>NN</strong>
-            <span>Exporter-level coefficient for target-country exporters sending this HS code onward to non-target destinations.</span>
           </article>
           <article class="producer-legend-item">
             <strong>Exposure</strong>

@@ -42,10 +42,9 @@ def main() -> int:
     print(f"Optimized SN total: {summary['optimized_SN_total']:.6f}")
     if summary["reduction_ratio"] == summary["reduction_ratio"]:
         print(f"Reduction ratio: {float(summary['reduction_ratio']):.6%}")
-    print(f"A vars (PP): {int(summary['number_of_A_variables'])}")
-    print(f"B vars (PN): {int(summary['number_of_B_variables'])}")
-    print(f"G vars (NP): {int(summary['number_of_G_variables'])}")
-    print(f"NN vars: {int(summary['number_of_NN_variables'])}")
+    print(f"c_pp vars (PP): {int(summary['number_of_c_pp_variables'])}")
+    print(f"c_pn vars (PN): {int(summary['number_of_c_pn_variables'])}")
+    print(f"c_np vars (NP): {int(summary['number_of_c_np_variables'])}")
     return 0
 
 

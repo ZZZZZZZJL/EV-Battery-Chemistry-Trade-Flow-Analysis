@@ -120,14 +120,14 @@
             <p class="eyebrow">Diagnostics</p>
             <h2>Optimization Diagnostics</h2>
           </div>
-            <div id="table-status" class="status-pill order-note">Diagnostics respond to the selected result mode.</div>
+          <div id="table-status" class="status-pill order-note">Diagnostics respond to the selected result mode.</div>
         </div>
         <div class="table-grid">
           <section class="table-card table-card-wide table-card-snapshot">
             <div class="order-card-head">
               <div>
-                <strong>Optimization Snapshot</strong>
-                <span>Reduction, coverage, and runtime signals for the active exported result or synchronized optimization snapshot</span>
+                <strong>Optimization Impact Overview</strong>
+                <span>Before/after SN reduction, main driver, node-type movement, and constraint pressure for the active optimization snapshot</span>
               </div>
             </div>
             <div id="metrics-table" class="table-host"></div>
@@ -135,8 +135,8 @@
           <section class="table-card table-card-stage">
             <div class="order-card-head">
               <div>
-                <strong>Stage Outcomes</strong>
-                <span>Stage-level totals in Original mode, or synchronized stage-group optimization outcomes in First Optimization</span>
+                <strong>Stage Comparison And Unknown Nodes</strong>
+                <span>Original versus First Optimization totals, split by each S1-S2-S3 style stage group and unknown-node type</span>
               </div>
             </div>
             <div id="stage-table" class="table-host"></div>
@@ -144,36 +144,36 @@
           <section class="table-card table-card-setup">
             <div class="order-card-head">
               <div>
-                <strong>Runtime, Bounds And HS Setup</strong>
+                <strong>Runtime Metadata</strong>
                 <span>Source, weights, scaling, and memo constraints condensed into grouped runtime cards</span>
               </div>
             </div>
             <div id="parameter-table" class="table-host"></div>
           </section>
-          <section class="table-card table-card-wide table-card-diagnostics">
-            <div class="order-card-head">
-              <div>
-                <strong>Stage Diagnostics</strong>
-                <span id="transition-note">Stage-level diagnostics summarize outcome, coverage, bounds, scaling, special handling, HS exposure, and setup notes for each synchronized stage triplet.</span>
-              </div>
-            </div>
-            <div id="transition-table" class="table-host"></div>
-          </section>
           <section class="table-card table-card-wide table-card-coefficients">
             <div class="order-card-head">
               <div>
-                <strong>A/B/G/NN Coefficients By Stage And HS Code</strong>
-                <span>Only active for First Optimization. Summary cards stay above while the detailed HS-code tables remain grouped by stage triplet.</span>
+                <strong>Coefficient Explorer</strong>
+                <span>Inspect a specific conversion coefficient, its recommended value, bounds, exposure, and related stage-flow changes.</span>
               </div>
             </div>
             <div id="producer-coefficient-table" class="table-host"></div>
+          </section>
+          <section class="table-card table-card-wide table-card-flows">
+            <div class="order-card-head">
+              <div>
+                <strong>Trade Flow Explorer</strong>
+                <span>Compare Original and First Optimization flows by stage group, source, target, special-node type, and change status.</span>
+              </div>
+            </div>
+            <div id="trade-flow-table" class="table-host"></div>
           </section>
         </div>
       </section>
     </main>
 
     <script src="/assets/plotly.min.js"></script>
-    <script src="/static/js/app.js?v=2121"></script>
+    <script src="/static/js/app.js?v=2122"></script>
   </body>
 </html>
 
