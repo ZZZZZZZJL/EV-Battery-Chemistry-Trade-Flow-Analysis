@@ -2,7 +2,7 @@
 
 Public repository for the EV battery chemistry trade-flow web product, the baseline analysis pipeline, and the first-generation `conversion_factor_optimization` engine.
 
-Live website: [trade-flow-opt.onrender.com](https://ev-battery-chemistry-trade-flow-analysis.onrender.com/)
+Live website: [ev-battery-chemistry-trade-flow-analysis.onrender.com](https://ev-battery-chemistry-trade-flow-analysis.onrender.com/)
 
 ## Research Context
 
