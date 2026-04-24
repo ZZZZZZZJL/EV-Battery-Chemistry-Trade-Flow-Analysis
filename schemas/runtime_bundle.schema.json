@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RuntimeBundle",
+  "type": "object",
+  "required": ["schema_version", "data_release_id", "built_at", "public_code_commit", "private_pipeline_tag", "algorithms", "metals", "years", "hashes"],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "data_release_id": {"type": "string"},
+    "built_at": {"type": "string"},
+    "public_code_commit": {"type": "string"},
+    "private_pipeline_tag": {"type": "string"},
+    "algorithms": {"type": "array", "items": {"type": "string"}},
+    "metals": {"type": "array", "items": {"type": "string"}},
+    "years": {"type": "array", "items": {"type": "integer"}},
+    "hashes": {"type": "object", "additionalProperties": {"type": "string"}}
+  }
+}

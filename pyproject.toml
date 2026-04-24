@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "trade-flow-opt"
+name = "ev-battery-chemistry-trade-flow-analysis"
 version = "0.1.0"
-description = "Lightweight baseline extraction and trade-flow optimization prototype."
+description = "Public EV battery chemistry trade-flow analysis repository with a unified web/runtime architecture."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -15,6 +15,8 @@ dependencies = [
   "openpyxl",
   "pandas",
   "plotly",
+  "scipy",
+  "httpx",
   "uvicorn",
 ]
 
