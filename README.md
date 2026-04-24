@@ -4,6 +4,10 @@ Public repository for the EV battery chemistry trade-flow web product, the basel
 
 Live website: [trade-flow-opt.onrender.com](https://trade-flow-opt.onrender.com/)
 
+## Research Context
+
+This project is associated with the [CMU Vehicle Electrification Group](https://www.cmu.edu/cit/veg/) and builds on the Nature Communications article [Electric vehicle battery chemistry affects supply chain disruption vulnerabilities](https://www.nature.com/articles/s41467-024-46418-1).
+
 ## Repository Model
 
 This repository follows four hard rules.
