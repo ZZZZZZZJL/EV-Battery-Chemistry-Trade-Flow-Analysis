@@ -1,20 +1,19 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>EV Battery Critical Mineral Supply Chain Analysis</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="/static/css/app.css?v=2122" />
+    <link rel="stylesheet" href="/static/css/app.css?v=2304" />
   </head>
   <body>
     <main class="page-shell">
       <section class="hero">
         <div class="hero-head">
           <div class="hero-copy">
-            <p class="eyebrow">Critical Minerals</p>
-            <h1>EV Battery Critical Mineral Supply Chain Analysis</h1>
-            <p class="lede">A research-facing workspace for tracing mining, post-trade, refining, and cathode transitions across the EV battery supply chain. This viewer switches between the Original export and the latest First Optimization result, with First Optimization synchronized from the conversion_factor_optimization engine into the published runtime snapshot.</p>
+            <h1>EV Battery Chemistry Trade Flow Analysis</h1>
+            <p class="lede">Trace critical-mineral supply-chain flows from mining to cathode production, then compare the Original export with the synchronized First Optimization runtime snapshot.</p>
             <div class="hero-credit" aria-label="Project credits">
               <span class="hero-credit-item">
                 <span class="hero-credit-label">Author</span>
@@ -27,62 +26,96 @@
             </div>
           </div>
         </div>
-        <section class="hero-console" aria-label="Access and visualization controls">
-          <div class="hero-console-head">
-            <div>
-              <p class="eyebrow">Control Console</p>
-              <h2 class="hero-console-title">Access And Runtime Controls</h2>
-            </div>
-            <p class="hero-console-note">Switch access mode, datasets, scenarios, year, result snapshot, and node scaling from one unified workspace.</p>
-          </div>
-          <div class="hero-actions">
-            <div class="control-block control-block-access">
-              <span class="control-label">Access</span>
-              <div id="access-mode-buttons" class="pill-row"></div>
-              <div id="access-password-wrap" class="access-password-wrap is-hidden">
-                <input id="access-password-input" class="text-input" type="password" placeholder="Enter password" />
-                <button id="access-unlock-btn" class="primary-btn" type="button">Unlock</button>
-              </div>
-              <p id="access-note" class="inline-note">Guest mode is the default. Non-guest mode reveals diagnostics and production values after password verification.</p>
-            </div>
-            <div class="control-block control-block-theme">
-              <span class="control-label">Theme</span>
-              <div id="theme-buttons" class="pill-row"></div>
-              <p class="inline-note">Switch between the dark research surface and a white-background reading mode.</p>
-            </div>
-            <div class="control-block control-block-metal">
-              <span class="control-label">Metal</span>
-              <div id="metal-buttons" class="pill-row"></div>
-              <p id="metal-note" class="inline-note">Ni, Li, and Co are currently active datasets. Mn remains reserved until its workbook set is connected.</p>
-            </div>
-            <div class="control-block control-block-year">
-              <span class="control-label">Year</span>
-              <div id="year-buttons" class="pill-row"></div>
-            </div>
-            <div id="cobalt-mode-block" class="control-block control-block-cobalt-mode is-hidden">
-              <span class="control-label">Co Scenario</span>
-              <div id="cobalt-mode-buttons" class="pill-row"></div>
-              <p id="cobalt-mode-note" class="inline-note">Middle uses the workbook's Middle battery related row, while Max and Min switch the refining-side scenario bounds.</p>
-            </div>
-            <div class="control-block control-block-display">
-              <span class="control-label">Result</span>
-              <div id="result-buttons" class="pill-row"></div>
-              <p class="inline-note">Switch the Sankey diagram between the original exported result and the latest First Optimization snapshot synchronized from conversion_factor_optimization.</p>
-            </div>
-            <div class="control-block control-block-reference">
-              <label class="control-label" for="reference-qty-input">Reference Quantity (t)</label>
-              <input id="reference-qty-input" class="text-input" type="number" min="1" step="1000" />
-              <p class="inline-note">Reference quantity changes the node-height scaling, following the 2.1 layout logic while still reading precomputed flows.</p>
-            </div>
-            <div class="hero-buttons control-block control-block-actions">
-              <button id="refresh-btn" class="primary-btn" type="button">Refresh View</button>
-              <button id="download-btn" class="ghost-btn" type="button">Export PNG</button>
-            </div>
-          </div>
-        </section>
       </section>
 
-      <section class="workspace">
+      <header class="top-navigation" aria-label="Top navigation and controls">
+        <details id="top-nav-details" class="top-nav-details">
+          <summary class="top-nav-summary">
+            <div class="top-nav-selection-group">
+              <span class="top-nav-label">Selection</span>
+              <div id="state-chip-row" class="state-chip-row" aria-label="Current data state">
+                <span class="state-chip">Ni</span>
+                <span class="state-chip">2024</span>
+                <span class="state-chip">Original</span>
+              </div>
+            </div>
+            <div class="top-nav-function-group">
+              <span class="top-nav-label">Workspace</span>
+              <nav class="section-nav top-nav-primary" aria-label="Page sections">
+                <a href="#diagram-board">Sankey Diagram</a>
+                <a href="#order-board">Order Studio</a>
+                <a href="#data-board">Diagnostics</a>
+              </nav>
+            </div>
+            <span class="top-nav-toggle">Controls</span>
+          </summary>
+          <div class="top-nav-panel">
+            <section class="control-dock" aria-label="Access and visualization controls">
+              <div class="control-dock-main">
+                <div class="dock-group dock-group-metal">
+                  <span class="control-label">Metal</span>
+                  <div id="metal-buttons" class="pill-row"></div>
+                </div>
+                <div class="dock-group dock-group-year">
+                  <span class="control-label">Year</span>
+                  <div id="year-buttons" class="pill-row"></div>
+                </div>
+                <div id="cobalt-mode-block" class="dock-group dock-group-cobalt is-hidden">
+                  <span class="control-label">Co Scenario</span>
+                  <div id="cobalt-mode-buttons" class="pill-row"></div>
+                </div>
+                <div class="dock-group dock-group-result">
+                  <span class="control-label">Result</span>
+                  <div id="result-buttons" class="pill-row"></div>
+                </div>
+                <div class="dock-group dock-group-s7">
+                  <span class="control-label">S7 Display</span>
+                  <div class="pill-row s7-display-row">
+                    <button id="s7-country-btn" class="pill-btn" type="button" aria-pressed="true">By Country</button>
+                    <button id="s7-chemistry-btn" class="pill-btn" type="button" aria-pressed="false">By Chemistry</button>
+                    <button id="s7-aggregate-btn" class="pill-btn" type="button" aria-pressed="false">Merge NMC/NCA</button>
+                  </div>
+                </div>
+                <div class="dock-actions">
+                  <button id="refresh-btn" class="primary-btn" type="button">Refresh View</button>
+                  <button id="download-btn" class="ghost-btn" type="button">Export PNG</button>
+                </div>
+              </div>
+              <details class="advanced-panel">
+                <summary>Advanced controls</summary>
+                <div class="advanced-grid">
+                  <div class="control-block control-block-access">
+                    <span class="control-label">Access</span>
+                    <div id="access-mode-buttons" class="pill-row"></div>
+                    <form id="access-password-form" class="access-password-form" autocomplete="off">
+                      <div id="access-password-wrap" class="access-password-wrap is-hidden">
+                        <input class="sr-only" type="text" name="username" autocomplete="username" tabindex="-1" aria-hidden="true" value="analyst" />
+                        <input id="access-password-input" class="text-input" type="password" placeholder="Enter password" autocomplete="current-password" />
+                        <button id="access-unlock-btn" class="primary-btn" type="button">Unlock</button>
+                      </div>
+                    </form>
+                    <p id="access-note" class="inline-note">Guest mode is the default. Non-guest mode reveals diagnostics and production values after password verification.</p>
+                  </div>
+                  <div class="control-block control-block-theme">
+                    <span class="control-label">Theme</span>
+                    <div id="theme-buttons" class="pill-row"></div>
+                    <p class="inline-note">Switch between the dark research surface and the white-background reading mode.</p>
+                  </div>
+                  <div class="control-block control-block-reference">
+                    <label class="control-label" for="reference-qty-input">Reference Quantity (t)</label>
+                    <input id="reference-qty-input" class="text-input" type="number" min="1" step="1000" />
+                    <p class="inline-note">Reference quantity changes node-height scaling without rebuilding the published flows.</p>
+                  </div>
+                  <p id="metal-note" class="inline-note control-note-wide">Ni, Li, and Co are active datasets for this optimization viewer.</p>
+                  <p id="cobalt-mode-note" class="inline-note control-note-wide">Middle, Max, and Min switch cobalt refining-side scenario bounds when cobalt is selected.</p>
+                </div>
+              </details>
+            </section>
+          </div>
+        </details>
+      </header>
+
+      <section id="diagram-board" class="workspace">
         <div class="workspace-main">
           <div class="section-head">
             <div>
@@ -90,10 +123,6 @@
               <h2 id="chart-title">Ni 7-Step Supply Chain</h2>
             </div>
             <div id="status-pill" class="status-pill">Loading</div>
-          </div>
-          <div class="section-tools">
-            <p class="section-note">The viewer keeps the established seven-stage reading experience while figures now load from published Original and First Optimization runtime snapshots.</p>
-            <a class="section-link" href="#order-board">Jump to Order Studio</a>
           </div>
           <div id="summary-grid" class="summary-grid"></div>
           <div class="chart-frame">
@@ -109,7 +138,13 @@
             <p class="eyebrow">Order Studio</p>
             <h2>Stage Sorting, Continent Grouping And Aggregation</h2>
           </div>
-          <div class="status-pill order-note">Use each stage card below to switch between By Size, Manual, and By Continent. Aggregation is reserved for a later iteration.</div>
+          <div class="status-pill order-note">Open one stage at a time for detailed sorting; use global controls for bulk changes.</div>
+        </div>
+        <div class="order-global-controls" aria-label="Global sorting controls">
+          <span>Apply sorting to all stages</span>
+          <button id="sort-all-size" class="pill-btn" type="button">By Size</button>
+          <button id="sort-all-manual" class="pill-btn" type="button">Manual</button>
+          <button id="sort-all-continent" class="pill-btn" type="button">By Continent</button>
         </div>
         <div id="order-grid" class="order-grid"></div>
       </section>
@@ -173,8 +208,6 @@
     </main>
 
     <script src="/assets/plotly.min.js"></script>
-    <script src="/static/js/app.js?v=2122"></script>
+    <script src="/static/js/app.js?v=2304"></script>
   </body>
 </html>
-
-

@@ -73,6 +73,8 @@ def build_sankey_payload(
     aggregate_counts: dict[str, int] | None = None,
     cobalt_mode: str = DEFAULT_COBALT_MODE,
     access_mode: str = DEFAULT_ACCESS_MODE,
+    s7_view_mode: str = "country",
+    s7_aggregate_nmc_nca: bool = False,
 ) -> dict:
     repo = get_repository()
     return build_app_payload(
@@ -89,5 +91,7 @@ def build_sankey_payload(
         aggregate_counts=aggregate_counts or {},
         cobalt_mode=cobalt_mode,
         access_mode=access_mode,
+        s7_view_mode=s7_view_mode,
+        s7_aggregate_nmc_nca=s7_aggregate_nmc_nca,
     )
 

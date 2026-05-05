@@ -148,7 +148,25 @@ def _build_country_payload(inputs: LithiumYearInputs):
     return builder.nodes, builder.links
 
 
-def _build_chemistry_payload(inputs: LithiumYearInputs, aggregate_display: bool):
+def _nmc_nca_maps(inputs: LithiumYearInputs, aggregate_nmc_nca: bool) -> tuple[dict[str, dict[int, float]], dict[str, dict[int, float]]]:
+    if aggregate_nmc_nca:
+        return (
+            {"NMC/NCA": _sum_maps(inputs.cathode_ncm, inputs.cathode_nca)},
+            {"NMC/NCA": inputs.cathode_ncm_nca_balance},
+        )
+    return (
+        {
+            "NMC": inputs.cathode_ncm,
+            "NCA": inputs.cathode_nca,
+        },
+        {
+            "NMC": inputs.cathode_ncm_balance,
+            "NCA": inputs.cathode_nca_balance,
+        },
+    )
+
+
+def _build_chemistry_payload(inputs: LithiumYearInputs, aggregate_display: bool, aggregate_nmc_nca: bool = False):
     builder = _make_builder(inputs)
     add_country_trade_section(
         builder,
@@ -216,6 +234,7 @@ def _build_chemistry_payload(inputs: LithiumYearInputs, aggregate_display: bool)
         label="Refining Other Products",
         color=SPECIAL_COLORS["refining_other"],
     )
+    hydroxide_target_totals, hydroxide_balance = _nmc_nca_maps(inputs, aggregate_nmc_nca)
     add_shared_pool_chem_trade_section(
         builder,
         epsilon=EPSILON,
@@ -224,14 +243,8 @@ def _build_chemistry_payload(inputs: LithiumYearInputs, aggregate_display: bool)
         target_stage="S7",
         source_totals=inputs.refining_hydroxide,
         trade_supply=inputs.refining_hydroxide,
-        target_totals_by_category={
-            "NCM": inputs.cathode_ncm,
-            "NCA": inputs.cathode_nca,
-        },
-        balance_by_category={
-            "NCM": inputs.cathode_ncm_balance,
-            "NCA": inputs.cathode_nca_balance,
-        },
+        target_totals_by_category=hydroxide_target_totals,
+        balance_by_category=hydroxide_balance,
         known_trade=inputs.trade3_hydroxide,
         source_role="Refining",
         target_role="Cathode",
@@ -290,7 +303,7 @@ def build_app_payload(
         "Lithium S3 totals use the rows where both Feedstock and Product are blank in Lithium_Processing_Final.xlsx.",
         "Rows without a numeric country id, including Various and TBC, are ignored in the Sankey calculation.",
         "If a Li 2nd post trade folder is missing, the S4 trade estimate is treated as 0 and the balance formulas still run.",
-        "Chemistry-related views use Lithium Hydroxide for NCM/NCA and Lithium Carbonate for LFP.",
+        "Chemistry-related views use Lithium Hydroxide for NMC/NCA and Lithium Carbonate for LFP.",
         f"Reference quantity is set to {reference_qty:,.0f} t. Lower values enlarge nodes, and the figure height expands from the tallest full stage stack so all nodes keep the planned gap.",
         "The fixed reference node beneath S7 keeps the same visual size in every export; changing Reference Quantity only changes how many tons that box represents.",
         "Continent sorting follows the region column in ListOfreference.xlsx.",

@@ -56,6 +56,7 @@ SPECIAL_COLORS = {
     "reference": "#8b929a",
     "refining_other": "#8fa5b8",
     "ncm": "#1d4ed8",
+    "nmc": "#1d4ed8",
     "nca": "#7c3aed",
     "lfp": "#16a34a",
 }
@@ -263,11 +264,12 @@ class SankeyBuilder:
             label = f"{self.country_name(country_id)} / {chemistry}"
             region = self.country_region(country_id)
         if key not in self.nodes:
+            color = "#34C759" if aggregate else self.color_map.get(country_id, "#7f8c8d")
             self.nodes[key] = NodeSpec(
                 key=key,
                 stage=stage,
                 label=label,
-                color=SPECIAL_COLORS.get(chemistry.lower(), "#7f8c8d"),
+                color=color,
                 kind="regular",
                 hover=hover,
                 region=region,
@@ -1081,46 +1083,38 @@ def add_shared_pool_chem_trade_section(
             if value > epsilon:
                 target_totals[(country_id, category)] = value
 
-    non_source_keys = {
-        category: builder.ensure_special_node(
-            non_source_stage or source_stage,
-            f"{category.lower()}_non_source_{source_role.lower()}",
-            f"{category} Non-{source_role}",
-            SPECIAL_COLORS.get(category.lower(), SPECIAL_COLORS["reference"]),
-            "source_special",
-        )
-        for category in categories
-    }
-    unknown_source_keys = {
-        category: builder.ensure_special_node(
-            unknown_source_stage or source_stage,
-            f"{category.lower()}_unknown_source_{source_role.lower()}",
-            f"{category} Unknown Source",
-            SPECIAL_COLORS["unknown_source"],
-            "source_special",
-        )
-        for category in categories
-    }
-    non_target_keys = {
-        category: builder.ensure_special_node(
-            non_target_stage or post_stage,
-            f"{category.lower()}_non_target_{target_role.lower()}",
-            f"{category} Non-{target_role}",
-            SPECIAL_COLORS.get(category.lower(), SPECIAL_COLORS["reference"]),
-            "sink_special",
-        )
-        for category in categories
-    }
-    unknown_target_keys = {
-        category: builder.ensure_special_node(
-            unknown_target_stage or target_stage,
-            f"{category.lower()}_unknown_target_{target_role.lower()}",
-            f"{category} Unknown Destination",
-            SPECIAL_COLORS["unknown_target"],
-            "sink_special",
-        )
-        for category in categories
-    }
+    non_source_key = builder.ensure_special_node(
+        non_source_stage or source_stage,
+        f"non_source_{source_role.lower()}",
+        f"Non-{source_role}",
+        SPECIAL_COLORS["non_source"],
+        "source_special",
+    )
+    unknown_source_key = builder.ensure_special_node(
+        unknown_source_stage or source_stage,
+        f"unknown_source_{source_role.lower()}",
+        "Unknown Source",
+        SPECIAL_COLORS["unknown_source"],
+        "source_special",
+    )
+    non_target_key = builder.ensure_special_node(
+        non_target_stage or post_stage,
+        f"non_target_{target_role.lower()}",
+        f"Non-{target_role}",
+        SPECIAL_COLORS["non_target"],
+        "sink_special",
+    )
+    unknown_target_key = builder.ensure_special_node(
+        unknown_target_stage or target_stage,
+        f"unknown_target_{target_role.lower()}",
+        "Unknown Destination",
+        SPECIAL_COLORS["unknown_target"],
+        "sink_special",
+    )
+    non_source_keys = {category: non_source_key for category in categories}
+    unknown_source_keys = {category: unknown_source_key for category in categories}
+    non_target_keys = {category: non_target_key for category in categories}
+    unknown_target_keys = {category: unknown_target_key for category in categories}
 
     exporter_targets: dict[int, dict[tuple[int, str], float]] = {}
     exporter_non_target: dict[int, dict[str, float]] = {}

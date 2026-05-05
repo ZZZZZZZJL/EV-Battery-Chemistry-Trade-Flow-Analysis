@@ -97,7 +97,7 @@ def _refining_maps_for_mode(
             inputs.refining_max_balance,
             inputs.cathode_max_total_balance,
             {
-                "NCM": inputs.cathode_max_ncm_balance,
+                "NMC": inputs.cathode_max_ncm_balance,
                 "NCA": inputs.cathode_max_nca_balance,
             },
         )
@@ -107,7 +107,7 @@ def _refining_maps_for_mode(
             inputs.refining_min_balance,
             inputs.cathode_min_total_balance,
             {
-                "NCM": inputs.cathode_min_ncm_balance,
+                "NMC": inputs.cathode_min_ncm_balance,
                 "NCA": inputs.cathode_min_nca_balance,
             },
         )
@@ -116,7 +116,7 @@ def _refining_maps_for_mode(
         inputs.refining_mid_balance,
         inputs.cathode_mid_total_balance,
         {
-            "NCM": inputs.cathode_mid_ncm_balance,
+            "NMC": inputs.cathode_mid_ncm_balance,
             "NCA": inputs.cathode_mid_nca_balance,
         },
     )
@@ -208,9 +208,29 @@ def _build_country_payload(inputs: CobaltYearInputs, cobalt_mode: str):
     return builder.nodes, builder.links
 
 
-def _build_chemistry_payload(inputs: CobaltYearInputs, cobalt_mode: str, aggregate_display: bool):
+def _cathode_chemistry_maps(
+    inputs: CobaltYearInputs,
+    total_balance: dict[int, float],
+    chem_balance: dict[str, dict[int, float]],
+    aggregate_nmc_nca: bool,
+) -> tuple[dict[str, dict[int, float]], dict[str, dict[int, float]]]:
+    if aggregate_nmc_nca:
+        return (
+            {"NMC/NCA": _sum_country_maps(inputs.cathode_ncm, inputs.cathode_nca)},
+            {"NMC/NCA": total_balance},
+        )
+    return (
+        {
+            "NMC": inputs.cathode_ncm,
+            "NCA": inputs.cathode_nca,
+        },
+        chem_balance,
+    )
+
+
+def _build_chemistry_payload(inputs: CobaltYearInputs, cobalt_mode: str, aggregate_display: bool, aggregate_nmc_nca: bool = False):
     builder = _make_builder(inputs)
-    refining_total, _refining_balance, _cathode_total_balance, chem_balance = _refining_maps_for_mode(inputs, cobalt_mode)
+    refining_total, _refining_balance, cathode_total_balance, chem_balance = _refining_maps_for_mode(inputs, cobalt_mode)
 
     add_country_trade_section(
         builder,
@@ -268,6 +288,12 @@ def _build_chemistry_payload(inputs: CobaltYearInputs, cobalt_mode: str, aggrega
             "unknown_target_slug": "unknown_refining_sink",
         },
     )
+    target_totals_by_category, balance_by_category = _cathode_chemistry_maps(
+        inputs,
+        cathode_total_balance,
+        chem_balance,
+        aggregate_nmc_nca,
+    )
     add_shared_pool_chem_trade_section(
         builder,
         epsilon=EPSILON,
@@ -276,11 +302,8 @@ def _build_chemistry_payload(inputs: CobaltYearInputs, cobalt_mode: str, aggrega
         target_stage="S7",
         source_totals=refining_total,
         trade_supply=refining_total,
-        target_totals_by_category={
-            "NCM": inputs.cathode_ncm,
-            "NCA": inputs.cathode_nca,
-        },
-        balance_by_category=chem_balance,
+        target_totals_by_category=target_totals_by_category,
+        balance_by_category=balance_by_category,
         known_trade=inputs.trade3,
         source_role="Refining",
         target_role="Cathode",
@@ -324,7 +347,7 @@ def build_app_payload(
         f"Refining mode is set to {COBALT_MODE_LABELS[resolved_mode]}. The site reads Max, Min, or Middle battery related rows from Cobalt_Refining_Final.xlsx accordingly.",
         "Co 2nd post trade combines the Co_282200, Co_810520, and Co_810530 folders before balancing S4.",
         "For Co S4, post-trade balancing now uses target-total fallback instead of the refining balance row so each S4 country node stays flow-conserving against its refining output plus unknown sink.",
-        "Chemistry-related views split S7 into NCM and NCA while keeping S6 country-based, matching the current Ni/Li website behavior.",
+        "Chemistry-related views split S7 into NMC and NCA while keeping S6 country-based, matching the current Ni/Li website behavior.",
         f"Reference quantity is set to {reference_qty:,.0f} t. Lower values enlarge nodes, and the figure height expands from the tallest full stage stack so all nodes keep the planned gap.",
         "The fixed reference node beneath S7 keeps the same visual size in every export; changing Reference Quantity only changes how many tons that box represents.",
         "Continent sorting follows the region column in ListOfreference.xlsx.",

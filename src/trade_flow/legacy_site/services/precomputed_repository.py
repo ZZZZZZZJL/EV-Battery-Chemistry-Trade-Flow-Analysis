@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 from dataclasses import dataclass
@@ -388,6 +388,7 @@ class OutputRepository:
             else:
                 self.cobalt_mode_results[scenario] = {}
         self.country_name_by_id: dict[int, str] = {}
+        self.country_region_by_id: dict[int, str] = {}
         try:
             reference_file = load_dataset_config().get("referenceFile", "")
             if reference_file:
@@ -397,8 +398,14 @@ class OutputRepository:
                     for row in reference_frame[["id", "name"]].itertuples(index=False)
                     if pd.notna(row.id) and str(row.name).strip()
                 }
+                self.country_region_by_id = {
+                    int(row.id): str(row.region).strip() or "Unknown"
+                    for row in reference_frame[["id", "region"]].itertuples(index=False)
+                    if pd.notna(row.id)
+                }
         except Exception:
             self.country_name_by_id = {}
+            self.country_region_by_id = {}
         self.first_optimization_tables = FirstOptimizationTableSource(
             self.first_optimization_diagnostics_root,
             self.country_name_by_id,
@@ -1060,4 +1067,3 @@ def get_repository() -> OutputRepository:
         first_optimization_diagnostics_root=first_optimization_diagnostics_root,
         version_output_root=config.output_versions_root,
     )
-

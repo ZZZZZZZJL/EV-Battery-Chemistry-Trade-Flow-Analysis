@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from copy import deepcopy
 from functools import lru_cache
@@ -7,6 +7,11 @@ from typing import Any
 
 import plotly.graph_objects as go
 
+from trade_flow.baseline import pipeline_v1
+from trade_flow.legacy_site.services import cobalt_sankey, lithium_sankey, nickel_sankey
+from trade_flow.legacy_site.services.cobalt_data import CobaltYearInputs, TradeFlow as CobaltTradeFlow
+from trade_flow.legacy_site.services.lithium_data import LithiumYearInputs, TradeFlow as LithiumTradeFlow
+from trade_flow.legacy_site.services.nickel_data import NickelYearInputs, TradeFlow as NickelTradeFlow
 from trade_flow.legacy_site.services.precomputed_repository import (
     OutputRepository,
     SCENARIO_LABELS,
@@ -61,6 +66,7 @@ DEFAULT_COBALT_MODE = "mid"
 COBALT_MODES = ("mid", "max", "min")
 COBALT_MODE_LABELS = {"mid": "Middle", "max": "Max", "min": "Min"}
 VIEW_MODE = "country"
+S7_VIEW_MODES = ("country", "chemistry", "chemistry_only")
 EPSILON = 1e-9
 GUEST_TOTAL_PATTERN = re.compile(r"<br>[0-9,]+(?:\.[0-9]+)? t$")
 GUEST_INLINE_TOTAL_PATTERN = re.compile(r" \([0-9,]+(?:\.[0-9]+)? t\)")
@@ -131,6 +137,26 @@ def _node_kind(row: dict[str, Any]) -> str:
     return "regular"
 
 
+def _country_id_from_node_key(key: Any) -> int | None:
+    match = re.search(r":(?:country|chem):(\d+)(?::|$)", str(key or ""))
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def _node_region(repo: OutputRepository, row: dict[str, Any]) -> str:
+    region = str(row.get("region") or "").strip()
+    if region and region != "Unknown":
+        return region
+    country_id = _country_id_from_node_key(row.get("key"))
+    if country_id is None:
+        return "Unknown"
+    return repo.country_region_by_id.get(country_id, "Unknown")
+
+
 def _guest_hover_text(text: Any) -> str:
     cleaned = str(text or "")
     cleaned = GUEST_TOTAL_PATTERN.sub("", cleaned)
@@ -159,6 +185,7 @@ def _apply_guest_figure_redaction(figure: dict[str, Any]) -> dict[str, Any]:
 
 
 def _rows_to_specs(
+    repo: OutputRepository,
     ordered_nodes: list[dict[str, Any]],
     links: list[dict[str, Any]],
     style_template: dict[tuple[str, str], dict[str, Any]],
@@ -168,8 +195,10 @@ def _rows_to_specs(
         key = str(row["key"])
         stage = str(row["stage"])
         label = str(row["label"])
+        region = _node_region(repo, row)
+        row["region"] = region
         template = style_template.get((stage, label))
-        color = str(template["color"]) if template else _fallback_node_color(row)
+        color = str(template["color"]) if template else str(row.get("color") or _fallback_node_color(row))
         node_specs[key] = NodeSpec(
             key=key,
             stage=stage,
@@ -177,7 +206,7 @@ def _rows_to_specs(
             color=color,
             kind=_node_kind(row),
             hover=label,
-            region=str(row.get("region") or "Unknown"),
+            region=region,
         )
 
     link_specs: list[LinkSpec] = []
@@ -262,6 +291,186 @@ def _reference_qty_matches_default(metal: str, reference_qty: float | None) -> b
 
 def _cacheable_table_view(table_view: str) -> str:
     return table_view if table_view in {"auto", "compare", "baseline", "optimized"} else "auto"
+
+
+def _resolve_s7_view_mode(s7_view_mode: str | None) -> str:
+    normalized = str(s7_view_mode or VIEW_MODE).strip().lower().replace("-", "_")
+    if normalized not in S7_VIEW_MODES:
+        raise ValueError(f"Unsupported S7 view mode: {s7_view_mode}")
+    return normalized
+
+
+def _map_int_float(raw: dict[str, Any] | None) -> dict[int, float]:
+    return {
+        int(key): float(value)
+        for key, value in (raw or {}).items()
+    }
+
+
+def _trade_rows(flow_type: type, rows: list[dict[str, Any]] | None) -> tuple[Any, ...]:
+    return tuple(
+        flow_type(
+            exporter=int(item["exporter"]),
+            importer=int(item["importer"]),
+            value=float(item["value"]),
+        )
+        for item in (rows or [])
+    )
+
+
+def _nickel_inputs_from_raw(raw: dict[str, Any]) -> NickelYearInputs:
+    return NickelYearInputs(
+        mining_total=_map_int_float(raw.get("mining_total")),
+        mining_battery=_map_int_float(raw.get("mining_battery")),
+        mining_unrelated=_map_int_float(raw.get("mining_unrelated")),
+        mining_concentrate=_map_int_float(raw.get("mining_concentrate")),
+        processing_total=_map_int_float(raw.get("processing_total")),
+        processing_battery=_map_int_float(raw.get("processing_battery")),
+        processing_unrelated=_map_int_float(raw.get("processing_unrelated")),
+        processing_balance=_map_int_float(raw.get("processing_balance")),
+        refining_total=_map_int_float(raw.get("refining_total")),
+        refining_balance=_map_int_float(raw.get("refining_balance")),
+        cathode_total=_map_int_float(raw.get("cathode_total")),
+        cathode_ncm=_map_int_float(raw.get("cathode_ncm")),
+        cathode_nca=_map_int_float(raw.get("cathode_nca")),
+        cathode_balance=_map_int_float(raw.get("cathode_balance")),
+        cathode_ncm_balance=_map_int_float(raw.get("cathode_ncm_balance")),
+        cathode_nca_balance=_map_int_float(raw.get("cathode_nca_balance")),
+        trade1=_trade_rows(NickelTradeFlow, raw.get("trade1")),
+        trade2=_trade_rows(NickelTradeFlow, raw.get("trade2")),
+        trade3=_trade_rows(NickelTradeFlow, raw.get("trade3")),
+    )
+
+
+def _lithium_inputs_from_raw(raw: dict[str, Any]) -> LithiumYearInputs:
+    return LithiumYearInputs(
+        mining_total=_map_int_float(raw.get("mining_total")),
+        mining_brine=_map_int_float(raw.get("mining_brine")),
+        mining_lithium_ores=_map_int_float(raw.get("mining_lithium_ores")),
+        processing_total=_map_int_float(raw.get("processing_total")),
+        processing_battery=_map_int_float(raw.get("processing_battery")),
+        processing_unrelated=_map_int_float(raw.get("processing_unrelated")),
+        processing_brine_total=_map_int_float(raw.get("processing_brine_total")),
+        processing_lithium_ores_total=_map_int_float(raw.get("processing_lithium_ores_total")),
+        processing_brine_balance=_map_int_float(raw.get("processing_brine_balance")),
+        processing_lithium_ores_balance=_map_int_float(raw.get("processing_lithium_ores_balance")),
+        refining_total=_map_int_float(raw.get("refining_total")),
+        refining_hydroxide=_map_int_float(raw.get("refining_hydroxide")),
+        refining_carbonate=_map_int_float(raw.get("refining_carbonate")),
+        refining_hydroxide_balance=_map_int_float(raw.get("refining_hydroxide_balance")),
+        refining_carbonate_balance=_map_int_float(raw.get("refining_carbonate_balance")),
+        cathode_total=_map_int_float(raw.get("cathode_total")),
+        cathode_ncm=_map_int_float(raw.get("cathode_ncm")),
+        cathode_nca=_map_int_float(raw.get("cathode_nca")),
+        cathode_lfp=_map_int_float(raw.get("cathode_lfp")),
+        cathode_ncm_nca_balance=_map_int_float(raw.get("cathode_ncm_nca_balance")),
+        cathode_ncm_balance=_map_int_float(raw.get("cathode_ncm_balance")),
+        cathode_nca_balance=_map_int_float(raw.get("cathode_nca_balance")),
+        cathode_lfp_balance=_map_int_float(raw.get("cathode_lfp_balance")),
+        trade1=_trade_rows(LithiumTradeFlow, raw.get("trade1")),
+        trade2=_trade_rows(LithiumTradeFlow, raw.get("trade2")),
+        trade3_hydroxide=_trade_rows(LithiumTradeFlow, raw.get("trade3_hydroxide")),
+        trade3_carbonate=_trade_rows(LithiumTradeFlow, raw.get("trade3_carbonate")),
+    )
+
+
+def _cobalt_inputs_from_raw(raw: dict[str, Any]) -> CobaltYearInputs:
+    return CobaltYearInputs(
+        mining_total=_map_int_float(raw.get("mining_total")),
+        mining_battery=_map_int_float(raw.get("mining_battery")),
+        mining_concentrate=_map_int_float(raw.get("mining_concentrate")),
+        mining_sulphate=_map_int_float(raw.get("mining_sulphate")),
+        processing_total=_map_int_float(raw.get("processing_total")),
+        processing_unrelated=_map_int_float(raw.get("processing_unrelated")),
+        refining_max=_map_int_float(raw.get("refining_max")),
+        refining_mid=_map_int_float(raw.get("refining_mid")),
+        refining_min=_map_int_float(raw.get("refining_min")),
+        refining_max_balance=_map_int_float(raw.get("refining_max_balance")),
+        refining_mid_balance=_map_int_float(raw.get("refining_mid_balance")),
+        refining_min_balance=_map_int_float(raw.get("refining_min_balance")),
+        cathode_total=_map_int_float(raw.get("cathode_total")),
+        cathode_ncm=_map_int_float(raw.get("cathode_ncm")),
+        cathode_nca=_map_int_float(raw.get("cathode_nca")),
+        cathode_max_total_balance=_map_int_float(raw.get("cathode_max_total_balance")),
+        cathode_mid_total_balance=_map_int_float(raw.get("cathode_mid_total_balance")),
+        cathode_min_total_balance=_map_int_float(raw.get("cathode_min_total_balance")),
+        cathode_max_ncm_balance=_map_int_float(raw.get("cathode_max_ncm_balance")),
+        cathode_mid_ncm_balance=_map_int_float(raw.get("cathode_mid_ncm_balance")),
+        cathode_min_ncm_balance=_map_int_float(raw.get("cathode_min_ncm_balance")),
+        cathode_max_nca_balance=_map_int_float(raw.get("cathode_max_nca_balance")),
+        cathode_mid_nca_balance=_map_int_float(raw.get("cathode_mid_nca_balance")),
+        cathode_min_nca_balance=_map_int_float(raw.get("cathode_min_nca_balance")),
+        trade1=_trade_rows(CobaltTradeFlow, raw.get("trade1")),
+        trade2=_trade_rows(CobaltTradeFlow, raw.get("trade2")),
+        trade3=_trade_rows(CobaltTradeFlow, raw.get("trade3")),
+    )
+
+
+def _build_s7_graph_from_inputs(
+    repo: OutputRepository,
+    metal: str,
+    year: int,
+    scenario: str,
+    cobalt_mode: str,
+    s7_view_mode: str,
+    aggregate_nmc_nca: bool,
+) -> tuple[dict[str, NodeSpec], list[LinkSpec]]:
+    raw = repo.load_case_json(metal, year, scenario, "inputs", cobalt_mode)
+    aggregate_display = s7_view_mode == "chemistry_only"
+    if metal == "Ni":
+        return nickel_sankey._build_chemistry_payload(
+            _nickel_inputs_from_raw(raw),
+            aggregate_display=aggregate_display,
+            aggregate_nmc_nca=aggregate_nmc_nca,
+        )
+    if metal == "Li":
+        return lithium_sankey._build_chemistry_payload(
+            _lithium_inputs_from_raw(raw),
+            aggregate_display=aggregate_display,
+            aggregate_nmc_nca=aggregate_nmc_nca,
+        )
+    if metal == "Co":
+        return cobalt_sankey._build_chemistry_payload(
+            _cobalt_inputs_from_raw(raw),
+            cobalt_mode=cobalt_mode,
+            aggregate_display=aggregate_display,
+            aggregate_nmc_nca=aggregate_nmc_nca,
+        )
+    raise ValueError(f"Unsupported metal for S7 chemistry view: {metal}")
+
+
+def _case_rows_for_s7_view(
+    repo: OutputRepository,
+    metal: str,
+    year: int,
+    scenario: str,
+    cobalt_mode: str,
+    s7_view_mode: str,
+    aggregate_nmc_nca: bool,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    if s7_view_mode == VIEW_MODE and not aggregate_nmc_nca:
+        return (
+            repo.load_case_csv(metal, year, scenario, "nodes", cobalt_mode).to_dict(orient="records"),
+            repo.load_case_csv(metal, year, scenario, "links", cobalt_mode).to_dict(orient="records"),
+        )
+    nodes, links = _build_s7_graph_from_inputs(
+        repo,
+        metal,
+        year,
+        scenario,
+        cobalt_mode,
+        s7_view_mode,
+        aggregate_nmc_nca,
+    )
+    node_rows = pipeline_v1.node_records(nodes, links, metal, year, scenario)
+    for row in node_rows:
+        spec = nodes.get(str(row.get("key")))
+        if spec:
+            row["color"] = spec.color
+    return (
+        node_rows,
+        pipeline_v1.link_records(nodes, links, metal, year, scenario),
+    )
 
 
 def _manual_sort(rows: list[dict[str, Any]], manual_order: list[str]) -> list[dict[str, Any]]:
@@ -384,6 +593,17 @@ def _ordered_stage_rows(
         special_position = special_positions.get(stage, baseline_special_positions.get(stage, DEFAULT_SPECIAL_POSITION))
         resolved_special_positions[stage] = special_position
 
+        for row in regular_rows:
+            row["region"] = _node_region(repo, row)
+
+        size_rank_by_key = {
+            str(row["key"]): index
+            for index, row in enumerate(
+                sorted(regular_rows, key=lambda item: (-float(item["value"]), str(item["label"]))),
+                start=1,
+            )
+        }
+
         ordered_regular = _stage_sort(stage, regular_rows, sort_mode, stage_orders.get(stage, []))
         ordered_special = sorted(
             special_rows,
@@ -415,6 +635,7 @@ def _ordered_stage_rows(
                 {
                     "label": str(row["label"]),
                     "value": float(row["value"]),
+                    "rank": size_rank_by_key.get(str(row["key"])),
                     "group": str(row.get("region") or "Unknown"),
                     "groupColor": REGION_COLORS.get(str(row.get("region") or "Unknown"), REGION_COLORS["Unknown"]),
                 }
@@ -442,6 +663,45 @@ def _build_stage_summary(repo: OutputRepository, metal: str, year: int, scenario
             "total": float(row.get("total_value", 0.0)),
         }
         for row in rows
+    ]
+
+
+def _build_stage_summary_for_view(
+    repo: OutputRepository,
+    metal: str,
+    year: int,
+    scenario: str,
+    cobalt_mode: str,
+    s7_view_mode: str,
+    s7_aggregate_nmc_nca: bool,
+) -> list[dict[str, Any]]:
+    if s7_view_mode == VIEW_MODE and not s7_aggregate_nmc_nca:
+        return _build_stage_summary(repo, metal, year, scenario, cobalt_mode)
+    raw_nodes, raw_links = _case_rows_for_s7_view(
+        repo,
+        metal,
+        year,
+        scenario,
+        cobalt_mode,
+        s7_view_mode,
+        s7_aggregate_nmc_nca,
+    )
+    nodes, _links = _prune_zero_rows(raw_nodes, raw_links)
+    node_counts: dict[str, int] = {}
+    totals: dict[str, float] = {}
+    for row in nodes:
+        stage = str(row["stage"])
+        node_counts[stage] = node_counts.get(stage, 0) + 1
+        totals[stage] = totals.get(stage, 0.0) + float(row.get("value", 0.0) or 0.0)
+    return [
+        {
+            "id": stage,
+            "label": STAGE_LABELS.get(stage, stage),
+            "nodeCount": int(node_counts.get(stage, 0)),
+            "total": float(totals.get(stage, 0.0)),
+        }
+        for stage in STAGE_ORDER
+        if stage in node_counts
     ]
 
 
@@ -538,10 +798,21 @@ def build_figure(
     aggregate_counts: dict[str, int] | None = None,
     cobalt_mode: str = DEFAULT_COBALT_MODE,
     access_mode: str = "analyst",
+    s7_view_mode: str = VIEW_MODE,
+    s7_aggregate_nmc_nca: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, str], dict[str, str], dict[str, int]]:
+    resolved_s7_view_mode = _resolve_s7_view_mode(s7_view_mode)
+    resolved_s7_aggregate = bool(s7_aggregate_nmc_nca and resolved_s7_view_mode != VIEW_MODE)
     _, _, style_template, _, _, _ = _style_template(repo, metal, year, cobalt_mode)
-    raw_nodes = repo.load_case_csv(metal, year, scenario, "nodes", cobalt_mode).to_dict(orient="records")
-    raw_links = repo.load_case_csv(metal, year, scenario, "links", cobalt_mode).to_dict(orient="records")
+    raw_nodes, raw_links = _case_rows_for_s7_view(
+        repo,
+        metal,
+        year,
+        scenario,
+        cobalt_mode,
+        resolved_s7_view_mode,
+        resolved_s7_aggregate,
+    )
     visible_nodes, visible_links = _prune_zero_rows(raw_nodes, raw_links)
     ordered_nodes, _stage_controls_seed, resolved_sort_modes, resolved_special_positions = _ordered_stage_rows(
         repo,
@@ -554,7 +825,7 @@ def build_figure(
         aggregate_counts,
         nodes=visible_nodes,
     )
-    node_specs, link_specs = _rows_to_specs(ordered_nodes, visible_links, style_template)
+    node_specs, link_specs = _rows_to_specs(repo, ordered_nodes, visible_links, style_template)
     resolved_aggregate_counts = _shared_validate_aggregate_counts(
         node_specs,
         link_specs,
@@ -570,7 +841,7 @@ def build_figure(
         stage_orders,
         resolved_special_positions,
         resolved_aggregate_counts,
-        VIEW_MODE,
+        resolved_s7_view_mode,
         EPSILON,
     )
     stage_controls = deepcopy(_stage_controls_seed)
@@ -583,7 +854,7 @@ def build_figure(
         figure_nodes,
         figure_links,
         year,
-        VIEW_MODE,
+        resolved_s7_view_mode,
         reference_qty,
         resolved_sort_modes,
         stage_orders,
@@ -637,6 +908,8 @@ def _build_app_payload_uncached(
     aggregate_counts: dict[str, int] | None = None,
     cobalt_mode: str = DEFAULT_COBALT_MODE,
     access_mode: str = "analyst",
+    s7_view_mode: str = VIEW_MODE,
+    s7_aggregate_nmc_nca: bool = False,
 ) -> dict[str, Any]:
     sort_modes = sort_modes or {}
     stage_orders = stage_orders or {}
@@ -647,6 +920,8 @@ def _build_app_payload_uncached(
         reference_qty = default_reference_quantity_for_metal(metal)
     if reference_qty <= 0:
         raise ValueError("reference_qty must be greater than 0.")
+    resolved_s7_view_mode = _resolve_s7_view_mode(s7_view_mode)
+    resolved_s7_aggregate = bool(s7_aggregate_nmc_nca and resolved_s7_view_mode != VIEW_MODE)
     comparison = repo.get_comparison_row(metal, year, scenario, cobalt_mode) if scenario != "baseline" else {}
     figure, stage_controls, resolved_sort_modes, resolved_special_positions, resolved_aggregate_counts = build_figure(
         repo,
@@ -661,9 +936,19 @@ def _build_app_payload_uncached(
         aggregate_counts,
         cobalt_mode,
         access_mode,
+        resolved_s7_view_mode,
+        resolved_s7_aggregate,
     )
     resolved_table_view = _resolved_table_view(scenario, table_view)
-    stage_summary = _build_stage_summary(repo, metal, year, scenario, cobalt_mode)
+    stage_summary = _build_stage_summary_for_view(
+        repo,
+        metal,
+        year,
+        scenario,
+        cobalt_mode,
+        resolved_s7_view_mode,
+        resolved_s7_aggregate,
+    )
     dataset_status = _dataset_status(repo, metal, year, scenario, table_view, cobalt_mode)
 
     compare_mode = "compare" if scenario != "baseline" else "baseline"
@@ -681,7 +966,9 @@ def _build_app_payload_uncached(
         "metal": metal,
         "theme": theme,
         "year": year,
-        "viewMode": VIEW_MODE,
+        "viewMode": resolved_s7_view_mode,
+        "s7ViewMode": resolved_s7_view_mode,
+        "s7AggregateNmcNca": resolved_s7_aggregate,
         "cobaltMode": cobalt_mode,
         "resultMode": scenario,
         "resultModeLabel": SCENARIO_LABELS.get(scenario, scenario),
@@ -800,12 +1087,18 @@ def build_app_payload(
     aggregate_counts: dict[str, int] | None = None,
     cobalt_mode: str = DEFAULT_COBALT_MODE,
     access_mode: str = "analyst",
+    s7_view_mode: str = VIEW_MODE,
+    s7_aggregate_nmc_nca: bool = False,
 ) -> dict[str, Any]:
     runtime_repo = get_repository()
+    resolved_s7_view_mode = _resolve_s7_view_mode(s7_view_mode)
+    resolved_s7_aggregate = bool(s7_aggregate_nmc_nca and resolved_s7_view_mode != VIEW_MODE)
     if (
         repo is runtime_repo
         and _uses_default_layout(sort_modes, stage_orders, special_positions, aggregate_counts)
         and _reference_qty_matches_default(metal, reference_qty)
+        and resolved_s7_view_mode == VIEW_MODE
+        and not resolved_s7_aggregate
     ):
         return deepcopy(
             _build_default_payload_cached(
@@ -833,5 +1126,6 @@ def build_app_payload(
         aggregate_counts=aggregate_counts,
         cobalt_mode=cobalt_mode,
         access_mode=access_mode,
+        s7_view_mode=resolved_s7_view_mode,
+        s7_aggregate_nmc_nca=resolved_s7_aggregate,
     )
-

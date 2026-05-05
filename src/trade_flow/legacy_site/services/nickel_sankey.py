@@ -135,7 +135,37 @@ def _build_country_payload(inputs: NickelYearInputs):
     return builder.nodes, builder.links
 
 
-def _build_chemistry_payload(inputs: NickelYearInputs, aggregate_display: bool):
+def _sum_country_maps(*maps: dict[int, float]) -> dict[int, float]:
+    result: dict[int, float] = {}
+    for mapping in maps:
+        for country_id, value in mapping.items():
+            result[int(country_id)] = result.get(int(country_id), 0.0) + float(value)
+    return {
+        country_id: value
+        for country_id, value in result.items()
+        if abs(value) > EPSILON
+    }
+
+
+def _cathode_chemistry_maps(inputs: NickelYearInputs, aggregate_nmc_nca: bool) -> tuple[dict[str, dict[int, float]], dict[str, dict[int, float]]]:
+    if aggregate_nmc_nca:
+        return (
+            {"NMC/NCA": _sum_country_maps(inputs.cathode_ncm, inputs.cathode_nca)},
+            {"NMC/NCA": inputs.cathode_balance},
+        )
+    return (
+        {
+            "NMC": inputs.cathode_ncm,
+            "NCA": inputs.cathode_nca,
+        },
+        {
+            "NMC": inputs.cathode_ncm_balance,
+            "NCA": inputs.cathode_nca_balance,
+        },
+    )
+
+
+def _build_chemistry_payload(inputs: NickelYearInputs, aggregate_display: bool, aggregate_nmc_nca: bool = False):
     builder = _make_builder(inputs)
     add_country_trade_section(
         builder,
@@ -193,6 +223,7 @@ def _build_chemistry_payload(inputs: NickelYearInputs, aggregate_display: bool):
             "unknown_target_slug": "unknown_refining_sink",
         },
     )
+    target_totals_by_category, balance_by_category = _cathode_chemistry_maps(inputs, aggregate_nmc_nca)
     add_shared_pool_chem_trade_section(
         builder,
         epsilon=EPSILON,
@@ -201,14 +232,8 @@ def _build_chemistry_payload(inputs: NickelYearInputs, aggregate_display: bool):
         target_stage="S7",
         source_totals=inputs.refining_total,
         trade_supply=inputs.refining_total,
-        target_totals_by_category={
-            "NCM": inputs.cathode_ncm,
-            "NCA": inputs.cathode_nca,
-        },
-        balance_by_category={
-            "NCM": inputs.cathode_ncm_balance,
-            "NCA": inputs.cathode_nca_balance,
-        },
+        target_totals_by_category=target_totals_by_category,
+        balance_by_category=balance_by_category,
         known_trade=inputs.trade3,
         source_role="Refining",
         target_role="Cathode",

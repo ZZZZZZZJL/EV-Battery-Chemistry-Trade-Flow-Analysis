@@ -33,6 +33,8 @@ class FigureRequestModel(BaseModel):
     cobaltMode: str = DEFAULT_COBALT_MODE
     accessMode: str = DEFAULT_ACCESS_MODE
     accessPassword: str = ""
+    s7ViewMode: str = "country"
+    s7AggregateNmcNca: bool = False
 
 
 def _validate_access(access_mode: str, access_password: str) -> str:
@@ -53,6 +55,8 @@ def figure_get(
     cobalt_mode: str = DEFAULT_COBALT_MODE,
     access_mode: str = DEFAULT_ACCESS_MODE,
     access_password: str = "",
+    s7_view_mode: str = "country",
+    s7_aggregate_nmc_nca: bool = False,
 ) -> JSONResponse:
     validated_access_mode = _validate_access(access_mode, access_password)
     try:
@@ -65,6 +69,8 @@ def figure_get(
             reference_qty=reference_qty,
             cobalt_mode=cobalt_mode,
             access_mode=validated_access_mode,
+            s7_view_mode=s7_view_mode,
+            s7_aggregate_nmc_nca=s7_aggregate_nmc_nca,
         )
     except (ValueError, KeyError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -93,6 +99,8 @@ def figure(request: FigureRequestModel) -> JSONResponse:
             aggregate_counts=request.aggregateCounts,
             cobalt_mode=request.cobaltMode,
             access_mode=validated_access_mode,
+            s7_view_mode=request.s7ViewMode,
+            s7_aggregate_nmc_nca=request.s7AggregateNmcNca,
         )
     except (ValueError, KeyError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

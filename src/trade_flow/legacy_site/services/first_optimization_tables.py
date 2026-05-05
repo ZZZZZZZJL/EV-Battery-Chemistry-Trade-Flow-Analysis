@@ -21,6 +21,26 @@ STAGE_FOLDER_NAMES = {
     "S3-S4-S5": "s3_s4_s5",
     "S5-S6-S7": "s5_s6_s7",
 }
+CURRENT_FACTOR_SPECS = {
+    "c_pp": ("factor_c_pp.csv", "optimized_c_pp"),
+    "c_pn": ("factor_c_pn.csv", "optimized_c_pn"),
+    "c_np": ("factor_c_np.csv", "optimized_c_np"),
+}
+LEGACY_FACTOR_SPECS = {
+    "A": ("factor_A.csv", "optimized_A_ij"),
+    "B": ("factor_B.csv", "optimized_B_i"),
+    "G": ("factor_G.csv", "optimized_G_j"),
+    "NN": ("factor_NN.csv", "optimized_NN_i"),
+}
+FACTOR_COUNTRY_COLUMNS = {
+    "c_pp": ("source_country_id", "target_country_id"),
+    "c_pn": ("source_country_id",),
+    "c_np": ("target_country_id",),
+    "A": ("source_country_id", "target_country_id"),
+    "B": ("source_country_id",),
+    "G": ("target_country_id",),
+    "NN": ("source_country_id",),
+}
 
 
 def _safe_float(value: Any) -> float:
@@ -70,7 +90,7 @@ def _transition_sort_key(value: str) -> int:
 
 
 def _weights_signature(weights: dict[str, Any]) -> str:
-    ordered = ["alpha", "beta_pp", "beta_pn", "beta_np"]
+    ordered = ["alpha", "beta_pp", "beta_pn", "beta_np", "beta_nn"]
     pairs = [f"{key}={weights[key]}" for key in ordered if key in weights]
     return ", ".join(pairs)
 
@@ -139,9 +159,19 @@ class FirstOptimizationTableSource:
 
     def _stage_case_summary(self, metal: str, year: int, stage_triplet: str) -> dict[str, Any]:
         country_results = self._load_case_csv(metal, year, stage_triplet, "country_results.csv")
-        factor_c_pp = self._load_case_csv(metal, year, stage_triplet, "factor_c_pp.csv")
-        factor_c_pn = self._load_case_csv(metal, year, stage_triplet, "factor_c_pn.csv")
-        factor_c_np = self._load_case_csv(metal, year, stage_triplet, "factor_c_np.csv")
+        factor_frames = {
+            coefficient_class: self._load_case_csv(metal, year, stage_triplet, filename)
+            for coefficient_class, (filename, _value_column) in CURRENT_FACTOR_SPECS.items()
+        }
+        factor_specs = CURRENT_FACTOR_SPECS
+        factor_format = "current"
+        if all(frame.empty for frame in factor_frames.values()):
+            factor_frames = {
+                coefficient_class: self._load_case_csv(metal, year, stage_triplet, filename)
+                for coefficient_class, (filename, _value_column) in LEGACY_FACTOR_SPECS.items()
+            }
+            factor_specs = LEGACY_FACTOR_SPECS
+            factor_format = "legacy"
         source_scaling = self._load_case_csv(metal, year, stage_triplet, "source_scaling.csv")
         special_cases = self._load_case_csv(metal, year, stage_triplet, "special_case_adjustments.csv")
 
@@ -152,14 +182,10 @@ class FirstOptimizationTableSource:
                 for value in country_results["country_id"].tolist()
                 if str(value).strip() and _safe_int(value) > 0
             }
-        for frame, columns in (
-            (factor_c_pp, ("source_country_id", "target_country_id")),
-            (factor_c_pn, ("source_country_id",)),
-            (factor_c_np, ("target_country_id",)),
-        ):
+        for coefficient_class, frame in factor_frames.items():
             if frame.empty:
                 continue
-            for column in columns:
+            for column in FACTOR_COUNTRY_COLUMNS.get(coefficient_class, ()):
                 if column not in frame.columns:
                     continue
                 for value in frame[column].tolist():
@@ -171,16 +197,14 @@ class FirstOptimizationTableSource:
         hs_exposure: dict[str, float] = {}
         lower_hits = 0
         upper_hits = 0
-        c_pp_count = int(len(factor_c_pp))
-        c_pn_count = int(len(factor_c_pn))
-        c_np_count = int(len(factor_c_np))
-        for frame, value_column in (
-            (factor_c_pp, "optimized_c_pp"),
-            (factor_c_pn, "optimized_c_pn"),
-            (factor_c_np, "optimized_c_np"),
-        ):
+        c_pp_count = int(len(factor_frames.get("c_pp", factor_frames.get("A", pd.DataFrame()))))
+        c_pn_count = int(len(factor_frames.get("c_pn", factor_frames.get("B", pd.DataFrame()))))
+        c_np_count = int(len(factor_frames.get("c_np", factor_frames.get("G", pd.DataFrame()))))
+        nn_count = int(len(factor_frames.get("NN", pd.DataFrame())))
+        for coefficient_class, frame in factor_frames.items():
             if frame.empty:
                 continue
+            value_column = factor_specs[coefficient_class][1]
             for record in frame.to_dict(orient="records"):
                 hs_code = str(record.get("hs_code", "") or "").strip()
                 if hs_code:
@@ -279,10 +303,15 @@ class FirstOptimizationTableSource:
         return {
             "country_count": len(country_ids),
             "hs_code_count": len(hs_codes),
+            "factor_format": factor_format,
+            "a_count": c_pp_count,
+            "b_count": c_pn_count,
+            "g_count": c_np_count,
             "c_pp_count": c_pp_count,
             "c_pn_count": c_pn_count,
             "c_np_count": c_np_count,
-            "coefficient_row_count": c_pp_count + c_pn_count + c_np_count,
+            "nn_count": nn_count,
+            "coefficient_row_count": c_pp_count + c_pn_count + c_np_count + nn_count,
             "lower_hit_count": lower_hits,
             "upper_hit_count": upper_hits,
             "bound_hit_count": lower_hits + upper_hits,
@@ -334,6 +363,8 @@ class FirstOptimizationTableSource:
         c_pp_total = sum(summary["c_pp_count"] for summary in summaries.values())
         c_pn_total = sum(summary["c_pn_count"] for summary in summaries.values())
         c_np_total = sum(summary["c_np_count"] for summary in summaries.values())
+        nn_total = sum(summary["nn_count"] for summary in summaries.values())
+        coefficient_total = c_pp_total + c_pn_total + c_np_total + nn_total
         hs_total = sum(summary["hs_code_count"] for summary in summaries.values())
         bound_hits = sum(summary["bound_hit_count"] for summary in summaries.values())
         special_total = sum(summary["special_total"] for summary in summaries.values())
@@ -350,7 +381,7 @@ class FirstOptimizationTableSource:
             {"Metric": "SN Reduction", "Value": reduction, "Note": ""},
             {"Metric": "SN Reduction Pct", "Value": reduction_pct, "Note": ""},
             {"Metric": "HS Codes Across Supported Stages", "Value": hs_total, "Note": "Stage-level total; the same HS code can appear in multiple stage groups."},
-            {"Metric": "c_pp / c_pn / c_np Rows", "Value": f"{c_pp_total} / {c_pn_total} / {c_np_total}", "Note": f"{c_pp_total + c_pn_total + c_np_total} coefficient rows in total."},
+            {"Metric": "c_pp / c_pn / c_np Rows", "Value": f"{c_pp_total} / {c_pn_total} / {c_np_total}", "Note": f"{coefficient_total} coefficient rows in total."},
             {"Metric": "Bound Hits", "Value": bound_hits, "Note": "Rows whose optimized coefficient equals Cmin or Cmax."},
             {"Metric": "Scaled Sources", "Value": scaled_sources, "Note": "Exporter rows where the Sankey source-side rule scales known outbound links back to trade_supply."},
             {"Metric": "Overflow Before Scaling", "Value": overflow_total, "Note": "Sum of optimized known flow that exceeded trade_supply before Sankey scaling."},
@@ -366,25 +397,33 @@ class FirstOptimizationTableSource:
             summary = self._stage_case_summary(metal, year, stage_triplet)
             status = str(row.get("status", ""))
             successful = status.lower() == "success"
-            stage_rows.append(
-                {
-                    "Stage Group": stage_triplet,
-                    "Status": status,
-                    "Original SN": _value_or_blank(_safe_float(row.get("baseline_SN_total")) if successful else ""),
-                    "Optimized SN": _value_or_blank(_safe_float(row.get("optimized_SN_total")) if successful else ""),
-                    "Reduction Pct": _value_or_blank(_safe_float(row.get("reduction_ratio")) if successful else ""),
-                    "Countries": summary["country_count"],
-                    "HS Codes": summary["hs_code_count"],
-                    "c_pp Rows": summary["c_pp_count"],
-                    "c_pn Rows": summary["c_pn_count"],
-                    "c_np Rows": summary["c_np_count"],
-                    "Bound Hits": summary["bound_hit_count"],
-                    "Scaled Sources": summary["scaled_source_count"],
-                    "Overflow Before Scaling": summary["overflow_total"],
-                    "Special Total": summary["special_total"],
-                    "Failure": _final_error_line(row.get("note")) if not successful else "",
-                }
-            )
+            payload = {
+                "Stage Group": stage_triplet,
+                "Status": status,
+                "Original SN": _value_or_blank(_safe_float(row.get("baseline_SN_total")) if successful else ""),
+                "Optimized SN": _value_or_blank(_safe_float(row.get("optimized_SN_total")) if successful else ""),
+                "Reduction Pct": _value_or_blank(_safe_float(row.get("reduction_ratio")) if successful else ""),
+                "Countries": summary["country_count"],
+                "HS Codes": summary["hs_code_count"],
+                "c_pp Rows": summary["c_pp_count"],
+                "c_pn Rows": summary["c_pn_count"],
+                "c_np Rows": summary["c_np_count"],
+                "Bound Hits": summary["bound_hit_count"],
+                "Scaled Sources": summary["scaled_source_count"],
+                "Overflow Before Scaling": summary["overflow_total"],
+                "Special Total": summary["special_total"],
+                "Failure": _final_error_line(row.get("note")) if not successful else "",
+            }
+            if summary["factor_format"] == "legacy":
+                payload.update(
+                    {
+                        "A Rows": summary["a_count"],
+                        "B Rows": summary["b_count"],
+                        "G Rows": summary["g_count"],
+                        "NN Rows": summary["nn_count"],
+                    }
+                )
+            stage_rows.append(payload)
         return stage_rows
 
     def parameter_rows(self, metal: str, year: int | None) -> list[dict[str, Any]]:
@@ -422,8 +461,9 @@ class FirstOptimizationTableSource:
                 "beta_pp": "Penalty on PP edge-level coefficient movement.",
                 "beta_pn": "Penalty on PN exporter-level coefficient movement.",
                 "beta_np": "Penalty on NP importer-level coefficient movement.",
+                "beta_nn": "Penalty on NN exporter-level coefficient movement.",
             }
-            for key in ("alpha", "beta_pp", "beta_pn", "beta_np"):
+            for key in ("alpha", "beta_pp", "beta_pn", "beta_np", "beta_nn"):
                 if key in weights:
                     rows.append({"Parameter": key, "Value": weights[key], "Note": weight_notes.get(key, "Objective weight")})
 
@@ -605,10 +645,17 @@ class FirstOptimizationTableSource:
         for stage_triplet in STAGE_TRIPLET_ORDER:
             transition_key = STAGE_TRIPLET_TO_KEY[stage_triplet]
             factor_frames = {
-                "c_pp": self._load_case_csv(metal, year, stage_triplet, "factor_c_pp.csv"),
-                "c_pn": self._load_case_csv(metal, year, stage_triplet, "factor_c_pn.csv"),
-                "c_np": self._load_case_csv(metal, year, stage_triplet, "factor_c_np.csv"),
+                coefficient_class: self._load_case_csv(metal, year, stage_triplet, filename)
+                for coefficient_class, (filename, _value_column) in CURRENT_FACTOR_SPECS.items()
             }
+            factor_specs = CURRENT_FACTOR_SPECS
+            if all(frame.empty for frame in factor_frames.values()):
+                factor_frames = {
+                    coefficient_class: self._load_case_csv(metal, year, stage_triplet, filename)
+                    for coefficient_class, (filename, _value_column) in LEGACY_FACTOR_SPECS.items()
+                }
+                factor_specs = LEGACY_FACTOR_SPECS
+
             exposure_totals: dict[str, float] = {}
             for frame in factor_frames.values():
                 if frame.empty:
@@ -620,7 +667,7 @@ class FirstOptimizationTableSource:
             for coefficient_class, frame in factor_frames.items():
                 if frame.empty:
                     continue
-                value_column = {"c_pp": "optimized_c_pp", "c_pn": "optimized_c_pn", "c_np": "optimized_c_np"}[coefficient_class]
+                value_column = factor_specs[coefficient_class][1]
                 for record in frame.to_dict(orient="records"):
                     hs_code = str(record.get("hs_code", "") or "")
                     exposure = _safe_float(record.get("raw_trade_quantity_t"))
@@ -628,26 +675,41 @@ class FirstOptimizationTableSource:
                     coef_value = _safe_float(record.get(value_column))
                     lower = _safe_float(record.get("Cmin"))
                     upper = _safe_float(record.get("Cmax"))
-                    if coefficient_class == "c_pp":
-                        producer_scope = str(record.get("source_country_i", "") or self.country_name_by_id.get(_safe_int(record.get("source_country_id")), "-"))
-                        partner_scope = str(record.get("target_country_j", "") or self.country_name_by_id.get(_safe_int(record.get("target_country_id")), "-"))
-                    elif coefficient_class == "c_pn":
-                        producer_scope = str(record.get("source_country_i", "") or self.country_name_by_id.get(_safe_int(record.get("source_country_id")), "-"))
+                    recommended = _safe_float(record.get("Crec"))
+                    source_name = str(
+                        record.get("source_country_i", "")
+                        or self.country_name_by_id.get(_safe_int(record.get("source_country_id")), "-")
+                    )
+                    target_name = str(
+                        record.get("target_country_j", "")
+                        or self.country_name_by_id.get(_safe_int(record.get("target_country_id")), "-")
+                    )
+                    if coefficient_class in {"c_pp", "A"}:
+                        producer_scope = f"Source {source_name}" if coefficient_class == "c_pp" else source_name
+                        partner_scope = f"Target {target_name}" if coefficient_class == "c_pp" else target_name
+                    elif coefficient_class in {"c_pn", "B"}:
+                        producer_scope = f"Source {source_name}" if coefficient_class == "c_pn" else source_name
+                        partner_scope = "All non-target producers" if coefficient_class == "c_pn" else "Source-side balance"
+                    elif coefficient_class in {"c_np", "G"}:
+                        producer_scope = f"Target {target_name}" if coefficient_class == "c_np" else target_name
+                        partner_scope = "All non-source exporters" if coefficient_class == "c_np" else "Target-side balance"
+                    else:
+                        producer_scope = source_name
                         partner_scope = "Source-side balance"
-                    elif coefficient_class == "c_np":
-                        producer_scope = str(record.get("target_country_j", "") or self.country_name_by_id.get(_safe_int(record.get("target_country_id")), "-"))
-                        partner_scope = "Target-side balance"
+                        if coefficient_class == "NN":
+                            partner_scope = "Target-country exporter to non-target destinations"
 
                     rows.append(
                         {
                             "transition": transition_key,
                             "transition_display": stage_triplet,
+                            "folder_name": str(record.get("folder_name", "") or ""),
                             "hs_code": hs_code,
                             "coefficient_class": coefficient_class,
                             "producer_scope": producer_scope,
                             "partner_scope": partner_scope,
                             "coef_value": coef_value,
-                            "recommended_value": _safe_float(record.get("Crec")),
+                            "recommended_value": recommended,
                             "lower_bound": lower,
                             "upper_bound": upper,
                             "bounds": f"[{lower:.3f}, {upper:.3f}]",

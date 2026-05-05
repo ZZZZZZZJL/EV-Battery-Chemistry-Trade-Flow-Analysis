@@ -35,8 +35,15 @@ const state = {
   sortModes: [],
   specialNodePositions: [],
   defaultSpecialNodePosition: "first",
+  s7Display: {
+    country: true,
+    chemistry: false,
+    aggregateNmcNca: false,
+  },
+  selectedOrderStage: "S1",
   layoutState: {},
   lastChartHeight: 0,
+  lastStageControls: {},
 };
 
 const dragState = {
@@ -55,50 +62,47 @@ let layoutSyncToken = 0;
 let figureRenderToken = 0;
 
 function syncWorkspaceLayout(chartHeightHint = state.lastChartHeight || 0) {
-  const workspaceMain = document.querySelector(".workspace-main");
-  const workspaceSide = document.querySelector(".workspace-side");
   const chartFrame = document.querySelector(".chart-frame");
   const chartHost = document.getElementById("chart");
-  if (!workspaceMain || !chartFrame || !chartHost) {
+  if (!chartFrame || !chartHost) {
     return;
   }
 
-  const intrinsicHeight = Math.max(Number(chartHeightHint) || 0, chartHost.offsetHeight || 0, 760);
-  chartFrame.style.minHeight = `${Math.ceil(intrinsicHeight)}px`;
+  chartFrame.style.minHeight = "";
 
-  if (!workspaceSide || window.innerWidth <= 1080) {
-    return;
-  }
-
+  const intrinsicHeight = Math.max(Number(chartHeightHint) || 0, chartHost.offsetHeight || 0, 860);
   const token = ++layoutSyncToken;
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
       if (token !== layoutSyncToken) {
         return;
       }
-      const refreshedIntrinsicHeight = Math.max(Number(chartHeightHint) || 0, chartHost.offsetHeight || 0, 760);
-      chartFrame.style.minHeight = `${Math.ceil(refreshedIntrinsicHeight)}px`;
-      const deficit = workspaceSide.offsetHeight - workspaceMain.offsetHeight;
-      if (deficit > 0) {
-        chartFrame.style.minHeight = `${Math.ceil(refreshedIntrinsicHeight + deficit)}px`;
-      }
-      requestAnimationFrame(() => {
-        if (token !== layoutSyncToken) {
-          return;
-        }
-        const residual = workspaceSide.offsetHeight - workspaceMain.offsetHeight;
-        if (residual > 1) {
-          const currentHeight = Math.max(parseFloat(chartFrame.style.minHeight || "0") || 0, refreshedIntrinsicHeight);
-          chartFrame.style.minHeight = `${Math.ceil(currentHeight + residual)}px`;
-        }
-      });
+      const refreshedIntrinsicHeight = Math.max(Number(chartHeightHint) || 0, chartHost.offsetHeight || 0, 860);
+      chartFrame.style.minHeight = `${Math.ceil(refreshedIntrinsicHeight + 48)}px`;
     });
   });
 }
 
 
-function layoutVariantKey(metal = state.metal, resultMode = state.resultMode, cobaltMode = state.cobaltMode) {
-  return metal === "Co" ? `${metal}:${resultMode}:${cobaltMode}` : `${metal}:${resultMode}`;
+function currentS7ViewMode() {
+  if (state.s7Display.country && state.s7Display.chemistry) {
+    return "chemistry";
+  }
+  if (state.s7Display.chemistry) {
+    return "chemistry_only";
+  }
+  return "country";
+}
+
+function layoutVariantKey(
+  metal = state.metal,
+  resultMode = state.resultMode,
+  cobaltMode = state.cobaltMode,
+  s7ViewMode = currentS7ViewMode(),
+  aggregateNmcNca = state.s7Display.aggregateNmcNca,
+) {
+  const s7Key = `${s7ViewMode}:${aggregateNmcNca ? "merged" : "split"}`;
+  return metal === "Co" ? `${metal}:${resultMode}:${cobaltMode}:${s7Key}` : `${metal}:${resultMode}:${s7Key}`;
 }
 
 function ensureLayoutState(metal, resultMode, cobaltMode = state.cobaltMode) {
@@ -140,12 +144,76 @@ function renderPills(container, items, activeValue, onSelect, formatter) {
     button.type = "button";
     button.className = "pill-btn";
     button.textContent = formatter(item);
+    button.setAttribute("aria-pressed", item === activeValue ? "true" : "false");
     if (item === activeValue) {
       button.classList.add("active");
     }
     button.addEventListener("click", () => onSelect(item));
     container.appendChild(button);
   });
+}
+
+function updateStateChips(payload = {}) {
+  const host = document.getElementById("state-chip-row");
+  if (!host) {
+    return;
+  }
+  const resultLabel = resultModeLabel(payload.resultMode || state.resultMode);
+  const cobaltLabel = (payload.metal || state.metal) === "Co" ? cobaltModeLabel(state.cobaltMode) : "";
+  const chips = [
+    payload.metal || state.metal,
+    String(payload.year || state.year),
+    resultLabel,
+    cobaltLabel,
+  ].filter(Boolean);
+  host.innerHTML = chips
+    .map((chip) => `<span class="state-chip">${escapeHtml(chip)}</span>`)
+    .join("");
+}
+
+function syncS7DisplayFromPayload(payload = {}) {
+  const viewMode = payload.s7ViewMode || payload.viewMode || currentS7ViewMode();
+  state.s7Display.country = viewMode === "country" || viewMode === "chemistry";
+  state.s7Display.chemistry = viewMode === "chemistry" || viewMode === "chemistry_only";
+  if (!state.s7Display.country && !state.s7Display.chemistry) {
+    state.s7Display.country = true;
+  }
+  state.s7Display.aggregateNmcNca = Boolean(payload.s7AggregateNmcNca);
+}
+
+function renderS7DisplayControls() {
+  const countryButton = document.getElementById("s7-country-btn");
+  const chemistryButton = document.getElementById("s7-chemistry-btn");
+  const aggregateButton = document.getElementById("s7-aggregate-btn");
+  if (!countryButton || !chemistryButton || !aggregateButton) {
+    return;
+  }
+  [
+    [countryButton, state.s7Display.country],
+    [chemistryButton, state.s7Display.chemistry],
+    [aggregateButton, state.s7Display.aggregateNmcNca],
+  ].forEach(([button, isActive]) => {
+    button.classList.toggle("active", Boolean(isActive));
+    button.setAttribute("aria-pressed", Boolean(isActive) ? "true" : "false");
+  });
+  aggregateButton.disabled = !state.s7Display.chemistry;
+  aggregateButton.classList.toggle("disabled", !state.s7Display.chemistry);
+}
+
+async function updateS7Display(nextDisplay) {
+  state.s7Display = {
+    ...state.s7Display,
+    ...nextDisplay,
+  };
+  if (!state.s7Display.country && !state.s7Display.chemistry) {
+    state.s7Display.country = true;
+  }
+  if (!state.s7Display.chemistry) {
+    state.s7Display.aggregateNmcNca = false;
+  }
+  renderS7DisplayControls();
+  ensureLayoutState(state.metal, state.resultMode, state.cobaltMode);
+  await loadFigure();
 }
 
 function applyTheme(theme) {
@@ -161,6 +229,7 @@ function renderThemeButtons() {
     button.type = "button";
     button.className = "pill-btn";
     button.textContent = theme === "light" ? "Light" : "Dark";
+    button.setAttribute("aria-pressed", theme === state.theme ? "true" : "false");
     if (theme === state.theme) {
       button.classList.add("active");
     }
@@ -183,6 +252,10 @@ function renderMetalButtons() {
     button.className = "pill-btn";
     button.textContent = metal.label;
     button.disabled = !metal.available;
+    button.setAttribute("aria-pressed", metal.id === state.metal ? "true" : "false");
+    if (!metal.available) {
+      button.title = "Dataset is not connected in this runtime snapshot.";
+    }
     if (metal.id === state.metal) {
       button.classList.add("active");
     }
@@ -265,6 +338,7 @@ async function unlockAnalystMode() {
     await loadFigure();
     state.accessUnlocked = true;
     renderAccessControls();
+    document.querySelector(".advanced-panel")?.removeAttribute("open");
   } catch (error) {
     state.accessUnlocked = false;
     renderAccessControls();
@@ -420,6 +494,8 @@ async function loadFigure() {
       stageOrders: layout.orders,
       specialPositions: layout.specialPositions,
       aggregateCounts: layout.aggregateCounts,
+      s7ViewMode: currentS7ViewMode(),
+      s7AggregateNmcNca: state.s7Display.aggregateNmcNca,
     }),
   });
   if (!response.ok) {
@@ -434,11 +510,14 @@ async function loadFigure() {
   state.cobaltMode = payload.cobaltMode || state.cobaltMode;
   state.resultMode = payload.resultMode;
   state.accessMode = payload.accessMode || state.accessMode;
+  syncS7DisplayFromPayload(payload);
   renderThemeButtons();
   renderMetalButtons();
   renderCobaltModeButtons();
   renderAccessControls();
   renderResultButtons();
+  renderS7DisplayControls();
+  renderS7DisplayControls();
   const layoutState = currentLayoutState();
   layoutState.sortModes = {
     ...layoutState.sortModes,
@@ -453,11 +532,13 @@ async function loadFigure() {
     ...(payload.aggregateCounts || {}),
   };
   state.referenceQty = payload.referenceQuantity;
+  state.lastStageControls = payload.stageControls || {};
   document.getElementById("reference-qty-input").value = Math.round(payload.referenceQuantity);
+  const optimizationLabel = payload.resultMode === "first_optimization" ? "with flow optimization" : "without flow optimization";
+  const cobaltSuffix = payload.metal === "Co" ? ` (${cobaltModeLabel(state.cobaltMode)} scenario)` : "";
   document.getElementById("chart-title").textContent =
-    `${payload.metal} 7-Step Supply Chain / ${payload.year} / ${resultModeLabel(payload.resultMode)}${
-      payload.metal === "Co" ? ` / ${cobaltModeLabel(state.cobaltMode)}` : ""
-    }`;
+    `The Sankey Diagram for ${payload.metal} in ${payload.year} ${optimizationLabel}${cobaltSuffix}`;
+  updateStateChips(payload);
   renderSummary(payload.stageSummary);
   renderNotes(payload.notes);
   renderDatasetStatus(payload.datasetStatus);
@@ -465,10 +546,10 @@ async function loadFigure() {
   renderTables(payload.tables);
   document.getElementById("table-status").textContent =
     state.accessMode === "guest"
-        ? "Diagnostics are hidden in guest mode."
+        ? "Guest view: diagnostics preview is locked. Unlock Analyst mode for values and drilldowns."
       : state.resultMode === "baseline"
         ? `Diagnostics: Original only. Switch to First Optimization for optimizer-stage summaries.`
-        : `Diagnostics: ${resultModeLabel(payload.resultMode)} stage summaries, bounds, source scaling, and c_pp/c_pn/c_np coefficients.`;
+        : `Diagnostics: ${resultModeLabel(payload.resultMode)} stage summaries, bounds, source scaling, and coefficient explorers.`;
   state.lastChartHeight = Number(payload.figure?.layout?.height || 0);
   await renderChartFigure(payload.figure);
   if (renderToken !== figureRenderToken) {
@@ -547,9 +628,16 @@ function buildOrderEntry({ stage, item, mode, layout, grid, isAggregatedTail }) 
     state.accessMode === "analyst"
       ? `<span class="order-item-value">${numberFormatter.format(item.value)} t</span>`
       : "";
+  const rankNumber = Number(item.rank);
+  const rankMarkup = Number.isFinite(rankNumber)
+    ? `<span class="order-item-rank">#${numberFormatter.format(rankNumber)}</span>`
+    : "";
   entry.innerHTML = `
     <div class="order-item-main">
-      <span class="order-item-label">${escapeHtml(item.label)}</span>
+      <div class="order-item-title">
+        ${rankMarkup}
+        <span class="order-item-label">${escapeHtml(item.label)}</span>
+      </div>
       ${isAggregatedTail ? '<span class="tail-badge">Aggregated tail</span>' : ""}
     </div>
     ${valueMarkup}
@@ -591,126 +679,122 @@ function renderGroupedItems(list, items, stage, mode, layout, grid, aggregateCou
   });
 }
 
-function renderOrderBoard(stageControls) {
-  const grid = document.getElementById("order-grid");
-  grid.innerHTML = "";
-  state.stageOrder.forEach((stage) => {
-    const config = stageControls[stage];
-    if (!config) {
-      return;
+function sortModeLabel(mode) {
+  return {
+    size: "By Size",
+    manual: "Manual",
+    continent: "By Continent",
+  }[mode] || mode;
+}
+
+function buildOrderStageEditor(stage, config, grid) {
+  const layout = currentLayoutState();
+  const mode = layout.sortModes[stage] || config.sortMode || "size";
+  layout.sortModes[stage] = mode;
+  const items = getRenderedItems(stage, config);
+  const specialPosition = getSpecialPosition(stage, config);
+  const aggregateCount = getAggregateCount(stage, config);
+
+  const card = document.createElement("article");
+  card.className = "order-card order-card-active";
+
+  const head = document.createElement("div");
+  head.className = "order-card-head order-card-head-static";
+  head.innerHTML = `
+    <div>
+      <strong>${stage}</strong>
+      <span>${escapeHtml(config.label.replace(`${stage} `, ""))}</span>
+    </div>
+    <span>${items.length} items</span>
+  `;
+  card.appendChild(head);
+
+  const body = document.createElement("div");
+  body.className = "order-card-body";
+
+  const toggle = document.createElement("div");
+  toggle.className = "sort-toggle";
+  ["size", "manual", "continent"].forEach((sortMode) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "pill-btn";
+    button.textContent = sortModeLabel(sortMode);
+    if (mode === sortMode) {
+      button.classList.add("active");
     }
-    const layout = currentLayoutState();
-    const mode = layout.sortModes[stage] || config.sortMode || "size";
-    layout.sortModes[stage] = mode;
-    const items = getRenderedItems(stage, config);
-    const specialPosition = getSpecialPosition(stage, config);
-    const aggregateCount = getAggregateCount(stage, config);
-
-    const card = document.createElement("section");
-    card.className = "order-card";
-
-    const head = document.createElement("div");
-    head.className = "order-card-head";
-    head.innerHTML = `
-      <div>
-        <strong>${stage}</strong>
-        <span>${config.label.replace(`${stage} `, "")}</span>
-      </div>
-      <span>${items.length} items</span>
-    `;
-    card.appendChild(head);
-
-    const toggle = document.createElement("div");
-    toggle.className = "sort-toggle";
-    const sortLabels = {
-      size: "By Size",
-      manual: "Manual",
-      continent: "By Continent",
-    };
-    ["size", "manual", "continent"].forEach((sortMode) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "pill-btn";
-      button.textContent = sortLabels[sortMode];
-      if (mode === sortMode) {
-        button.classList.add("active");
+    button.addEventListener("click", async () => {
+      layout.sortModes[stage] = sortMode;
+      if (sortMode === "manual") {
+        syncManualOrder(stage, config.items);
       }
-      button.addEventListener("click", async () => {
-        layout.sortModes[stage] = sortMode;
-        if (sortMode === "manual") {
-          syncManualOrder(stage, config.items);
-        }
-        if (sortMode === "continent") {
-          layout.aggregateCounts[stage] = 0;
-        }
-        await loadFigure();
-      });
-      toggle.appendChild(button);
+      if (sortMode === "continent") {
+        layout.aggregateCounts[stage] = 0;
+      }
+      await loadFigure();
     });
-    card.appendChild(toggle);
+    toggle.appendChild(button);
+  });
+  body.appendChild(toggle);
 
-    const specialControl = document.createElement("div");
-    specialControl.className = "special-control";
-    specialControl.innerHTML = `<div class="aggregate-label">Special nodes</div>`;
-    const specialToggle = document.createElement("div");
-    specialToggle.className = "sort-toggle compact-toggle";
-    ["first", "last"].forEach((position) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "pill-btn";
-      button.textContent = position === "first" ? "Place First" : "Place Last";
-      button.disabled = !config.hasSpecialNodes;
-      if (specialPosition === position) {
-        button.classList.add("active");
-      }
-      button.addEventListener("click", async () => {
-        layout.specialPositions[stage] = position;
-        await loadFigure();
-      });
-      specialToggle.appendChild(button);
-    });
-    specialControl.appendChild(specialToggle);
-    const specialNote = document.createElement("div");
-    specialNote.className = "aggregate-note";
-    specialNote.textContent = config.hasSpecialNodes
-      ? `${config.specialNodeCount} special-case node${config.specialNodeCount === 1 ? "" : "s"} stay together at the ${
-          specialPosition === "first" ? "start" : "end"
-        } of this stage.`
-      : "This stage has no special-case nodes in the current view.";
-    specialControl.appendChild(specialNote);
-    card.appendChild(specialControl);
-
-    const aggregateControl = document.createElement("div");
-    aggregateControl.className = "aggregate-control";
-    const aggregateDisabled = mode === "continent" || (config.maxAggregateCount || 0) === 0;
-    aggregateControl.innerHTML = `
-      <label class="aggregate-label" for="aggregate-${stage}">Aggregate tail count</label>
-      <input
-        id="aggregate-${stage}"
-        class="aggregate-input"
-        type="number"
-        min="0"
-        max="${config.maxAggregateCount || 0}"
-        step="1"
-        value="${aggregateCount}"
-        ${aggregateDisabled ? "disabled" : ""}
-      />
-      <div class="aggregate-note">${
-        mode === "continent"
-          ? "This mode consolidates the chart into one continent node for this stage."
-          : config.maxAggregateCount > 0
-            ? `Collapse the last 0-${config.maxAggregateCount} items into one node after sorting.`
-            : "This stage does not have enough standalone nodes to aggregate."
-      }</div>
-    `;
-    const aggregateInput = aggregateControl.querySelector("input");
-    if (aggregateInput) {
-      aggregateInput.disabled = aggregateDisabled;
-      if (!aggregateDisabled) {
-        aggregateInput.removeAttribute("disabled");
-      }
+  const specialControl = document.createElement("div");
+  specialControl.className = "special-control";
+  specialControl.innerHTML = `<div class="aggregate-label">Special nodes</div>`;
+  const specialToggle = document.createElement("div");
+  specialToggle.className = "sort-toggle compact-toggle";
+  ["first", "last"].forEach((position) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "pill-btn";
+    button.textContent = position === "first" ? "Place First" : "Place Last";
+    button.disabled = !config.hasSpecialNodes;
+    if (specialPosition === position) {
+      button.classList.add("active");
     }
-    if (aggregateInput && !aggregateDisabled) {
+    button.addEventListener("click", async () => {
+      layout.specialPositions[stage] = position;
+      await loadFigure();
+    });
+    specialToggle.appendChild(button);
+  });
+  specialControl.appendChild(specialToggle);
+  const specialNote = document.createElement("div");
+  specialNote.className = "aggregate-note";
+  specialNote.textContent = config.hasSpecialNodes
+    ? `${config.specialNodeCount} special-case node${config.specialNodeCount === 1 ? "" : "s"} stay together at the ${
+        specialPosition === "first" ? "start" : "end"
+      } of this stage.`
+    : "This stage has no special-case nodes in the current view.";
+  specialControl.appendChild(specialNote);
+  body.appendChild(specialControl);
+
+  const aggregateControl = document.createElement("div");
+  aggregateControl.className = "aggregate-control";
+  const aggregateDisabled = mode === "continent" || (config.maxAggregateCount || 0) === 0;
+  aggregateControl.innerHTML = `
+    <label class="aggregate-label" for="aggregate-${stage}">Aggregate tail count</label>
+    <input
+      id="aggregate-${stage}"
+      class="aggregate-input"
+      type="number"
+      min="0"
+      max="${config.maxAggregateCount || 0}"
+      step="1"
+      value="${aggregateCount}"
+      ${aggregateDisabled ? "disabled" : ""}
+    />
+    <div class="aggregate-note">${
+      mode === "continent"
+        ? "This mode consolidates the chart into one continent node for this stage."
+        : config.maxAggregateCount > 0
+          ? `Collapse the last 0-${config.maxAggregateCount} items into one node after sorting.`
+          : "This stage does not have enough standalone nodes to aggregate."
+    }</div>
+  `;
+  const aggregateInput = aggregateControl.querySelector("input");
+  if (aggregateInput) {
+    aggregateInput.disabled = aggregateDisabled;
+    if (!aggregateDisabled) {
+      aggregateInput.removeAttribute("disabled");
       aggregateInput.addEventListener("change", async () => {
         layout.aggregateCounts[stage] = clampAggregateCount(aggregateInput.value, config.maxAggregateCount || 0);
         await loadFigure();
@@ -724,31 +808,99 @@ function renderOrderBoard(stageControls) {
         await loadFigure();
       });
     }
-    card.appendChild(aggregateControl);
+  }
+  body.appendChild(aggregateControl);
 
-    const list = document.createElement("div");
-    list.className = "order-list";
-    if (!items.length) {
-      list.innerHTML = `<div class="order-empty">No standalone nodes in this stage for the current view.</div>`;
-    } else if (mode === "continent") {
-      renderGroupedItems(list, items, stage, mode, layout, grid, 0);
-    } else {
-      items.forEach((item) => {
-        list.appendChild(
-          buildOrderEntry({
-            stage,
-            item,
-            mode,
-            layout,
-            grid,
-            isAggregatedTail: false,
-          }),
-        );
-      });
-    }
-    card.appendChild(list);
-    grid.appendChild(card);
+  const list = document.createElement("div");
+  list.className = "order-list";
+  if (!items.length) {
+    list.innerHTML = `<div class="order-empty">No standalone nodes in this stage for the current view.</div>`;
+  } else if (mode === "continent") {
+    renderGroupedItems(list, items, stage, mode, layout, grid, 0);
+  } else {
+    items.forEach((item) => {
+      list.appendChild(
+        buildOrderEntry({
+          stage,
+          item,
+          mode,
+          layout,
+          grid,
+          isAggregatedTail: false,
+        }),
+      );
+    });
+  }
+  body.appendChild(list);
+  card.appendChild(body);
+  return card;
+}
+
+function renderOrderBoard(stageControls) {
+  const grid = document.getElementById("order-grid");
+  grid.innerHTML = "";
+  const availableStages = state.stageOrder.filter((stage) => stageControls[stage]);
+  if (!availableStages.length) {
+    grid.innerHTML = `<div class="order-empty">No stage controls are available for the current view.</div>`;
+    return;
+  }
+  if (!availableStages.includes(state.selectedOrderStage)) {
+    state.selectedOrderStage = availableStages[0];
+  }
+
+  const shell = document.createElement("div");
+  shell.className = "order-studio-layout";
+  const rail = document.createElement("div");
+  rail.className = "order-stage-rail";
+  const detail = document.createElement("div");
+  detail.className = "order-stage-detail";
+
+  availableStages.forEach((stage) => {
+    const config = stageControls[stage];
+    const layout = currentLayoutState();
+    const mode = layout.sortModes[stage] || config.sortMode || "size";
+    layout.sortModes[stage] = mode;
+    const items = getRenderedItems(stage, config);
+    const aggregateCount = getAggregateCount(stage, config);
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "order-stage-summary";
+    button.classList.toggle("active", stage === state.selectedOrderStage);
+    button.setAttribute("aria-pressed", stage === state.selectedOrderStage ? "true" : "false");
+    button.innerHTML = `
+      <div>
+        <strong>${stage}</strong>
+        <span>${escapeHtml(config.label.replace(`${stage} `, ""))}</span>
+      </div>
+      <span>${items.length} items</span>
+      <small>${sortModeLabel(mode)}${aggregateCount ? `, tail ${aggregateCount}` : ""}</small>
+    `;
+    button.addEventListener("click", () => {
+      state.selectedOrderStage = stage;
+      renderOrderBoard(stageControls);
+    });
+    rail.appendChild(button);
   });
+  detail.appendChild(buildOrderStageEditor(state.selectedOrderStage, stageControls[state.selectedOrderStage], grid));
+  shell.appendChild(rail);
+  shell.appendChild(detail);
+  grid.appendChild(shell);
+}
+
+async function applySortModeToAll(sortMode) {
+  const layout = currentLayoutState();
+  state.stageOrder.forEach((stage) => {
+    const config = state.lastStageControls[stage];
+    layout.sortModes[stage] = sortMode;
+    if (sortMode === "manual" && config) {
+      syncManualOrder(stage, config.items || []);
+    }
+    if (sortMode === "continent") {
+      layout.aggregateCounts[stage] = 0;
+    }
+  });
+  await loadFigure();
 }
 
 function formatValue(value, key = "") {
@@ -2362,6 +2514,32 @@ async function bootstrap() {
       width: 2200,
       scale: 1,
     });
+  });
+  document.getElementById("sort-all-size")?.addEventListener("click", async () => {
+    await applySortModeToAll("size");
+  });
+  document.getElementById("sort-all-manual")?.addEventListener("click", async () => {
+    await applySortModeToAll("manual");
+  });
+  document.getElementById("sort-all-continent")?.addEventListener("click", async () => {
+    await applySortModeToAll("continent");
+  });
+  document.querySelectorAll(".top-nav-primary a").forEach((link) => {
+    link.addEventListener("click", (event) => {
+      event.stopPropagation();
+    });
+  });
+  document.getElementById("s7-country-btn")?.addEventListener("click", async () => {
+    await updateS7Display({ country: !state.s7Display.country });
+  });
+  document.getElementById("s7-chemistry-btn")?.addEventListener("click", async () => {
+    await updateS7Display({ chemistry: !state.s7Display.chemistry });
+  });
+  document.getElementById("s7-aggregate-btn")?.addEventListener("click", async () => {
+    if (!state.s7Display.chemistry) {
+      return;
+    }
+    await updateS7Display({ aggregateNmcNca: !state.s7Display.aggregateNmcNca });
   });
   document.getElementById("access-unlock-btn").addEventListener("click", async () => {
     try {
