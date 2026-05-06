@@ -1,3 +1,8 @@
+import { hydrateStateFromUrl, syncStateToUrl } from "./app_state.js";
+import { ApiClient } from "./api_client.js";
+import { FigureController } from "./figure_controller.js";
+import { debounce, setShellBusy } from "./ui_shell.js";
+
 const state = {
   theme: "light",
   themes: [],
@@ -58,8 +63,19 @@ const PLOTLY_CONFIG = {
   modeBarButtonsToRemove: ["lasso2d", "select2d", "autoScale2d"],
 };
 
+const apiClient = new ApiClient();
+const figureController = new FigureController({
+  chartId: "chart",
+  frameSelector: ".chart-frame",
+  config: PLOTLY_CONFIG,
+});
+
 let layoutSyncToken = 0;
 let figureRenderToken = 0;
+let loadDebounceTimer = 0;
+let diagnosticSearchTimer = 0;
+let orderLayoutShell = null;
+let orderLayoutRail = null;
 
 function syncWorkspaceLayout(chartHeightHint = state.lastChartHeight || 0) {
   const chartFrame = document.querySelector(".chart-frame");
@@ -335,7 +351,7 @@ async function unlockAnalystMode() {
   const input = document.getElementById("access-password-input");
   state.accessPassword = input.value || "";
   try {
-    await loadFigure();
+    await loadFigure({ immediate: true, force: true });
     state.accessUnlocked = true;
     renderAccessControls();
     document.querySelector(".advanced-panel")?.removeAttribute("open");
@@ -468,95 +484,132 @@ function getRenderedItems(stage, config) {
 }
 
 async function renderChartFigure(figure) {
-  await Plotly.react("chart", figure.data, figure.layout, PLOTLY_CONFIG);
+  await figureController.render(figure);
 }
 
-async function loadFigure() {
-  const renderToken = ++figureRenderToken;
-  setStatus("Loading", "warn");
+function buildFigureRequest() {
   const layout = currentLayoutState();
-  const response = await fetch("/api/figure", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      metal: state.metal,
-      cobaltMode: state.cobaltMode,
-      theme: state.theme,
-      year: state.year,
-      resultMode: state.resultMode,
-      tableView: state.tableView,
-      referenceQuantity: state.referenceQty,
-      accessMode: state.accessMode,
-      accessPassword: state.accessPassword,
-      sortModes: layout.sortModes,
-      stageOrders: layout.orders,
-      specialPositions: layout.specialPositions,
-      aggregateCounts: layout.aggregateCounts,
-      s7ViewMode: currentS7ViewMode(),
-      s7AggregateNmcNca: state.s7Display.aggregateNmcNca,
-    }),
+  return {
+    metal: state.metal,
+    cobaltMode: state.cobaltMode,
+    theme: state.theme,
+    year: state.year,
+    resultMode: state.resultMode,
+    tableView: state.tableView,
+    referenceQuantity: state.referenceQty,
+    accessMode: state.accessMode,
+    accessPassword: state.accessPassword,
+    sortModes: layout.sortModes,
+    stageOrders: layout.orders,
+    specialPositions: layout.specialPositions,
+    aggregateCounts: layout.aggregateCounts,
+    s7ViewMode: currentS7ViewMode(),
+    s7AggregateNmcNca: state.s7Display.aggregateNmcNca,
+  };
+}
+
+async function runFigureLoad(options = {}) {
+  const renderToken = ++figureRenderToken;
+  setStatus("Updating", "warn");
+  setShellBusy(true, "Updating Sankey diagram");
+  figureController.setLoading("Updating Sankey diagram");
+  let payload;
+  try {
+    payload = await apiClient.requestFigure(buildFigureRequest(), {
+      cacheable: state.accessMode === "guest",
+      force: Boolean(options.force),
+    });
+  } catch (error) {
+    if (error.name === "AbortError") {
+      return;
+    }
+    if (renderToken === figureRenderToken) {
+      figureController.setError("Chart update failed");
+      showUiError(error.message || "Chart update failed.");
+      setShellBusy(false, "Chart update failed");
+    }
+    throw error;
+  }
+  if (renderToken !== figureRenderToken) {
+    return;
+  }
+  try {
+    state.metal = payload.metal;
+    state.cobaltMode = payload.cobaltMode || state.cobaltMode;
+    state.resultMode = payload.resultMode;
+    state.accessMode = payload.accessMode || state.accessMode;
+    syncS7DisplayFromPayload(payload);
+    renderThemeButtons();
+    renderMetalButtons();
+    renderCobaltModeButtons();
+    renderAccessControls();
+    renderResultButtons();
+    renderS7DisplayControls();
+    const layoutState = currentLayoutState();
+    layoutState.sortModes = {
+      ...layoutState.sortModes,
+      ...(payload.sortModes || {}),
+    };
+    layoutState.specialPositions = {
+      ...layoutState.specialPositions,
+      ...(payload.specialPositions || {}),
+    };
+    layoutState.aggregateCounts = {
+      ...layoutState.aggregateCounts,
+      ...(payload.aggregateCounts || {}),
+    };
+    state.referenceQty = payload.referenceQuantity;
+    state.lastStageControls = payload.stageControls || {};
+    document.getElementById("reference-qty-input").value = Math.round(payload.referenceQuantity);
+    const optimizationLabel = payload.resultMode === "first_optimization" ? "with flow optimization" : "without flow optimization";
+    const cobaltSuffix = payload.metal === "Co" ? ` (${cobaltModeLabel(state.cobaltMode)} scenario)` : "";
+    document.getElementById("chart-title").textContent =
+      `The Sankey Diagram for ${payload.metal} in ${payload.year} ${optimizationLabel}${cobaltSuffix}`;
+    updateStateChips(payload);
+    renderSummary(payload.stageSummary);
+    renderNotes(payload.notes);
+    renderDatasetStatus(payload.datasetStatus);
+    renderOrderBoard(payload.stageControls);
+    renderTables(payload.tables);
+    document.getElementById("table-status").textContent =
+      state.accessMode === "guest"
+          ? "Guest view: diagnostics preview is locked. Unlock Analyst mode for values and drilldowns."
+        : state.resultMode === "baseline"
+          ? `Diagnostics: Original only. Switch to First Optimization for optimizer-stage summaries.`
+          : `Diagnostics: ${resultModeLabel(payload.resultMode)} stage summaries, bounds, source scaling, and coefficient explorers.`;
+    state.lastChartHeight = Number(payload.figure?.layout?.height || 0);
+    await renderChartFigure(payload.figure);
+    if (renderToken !== figureRenderToken) {
+      return;
+    }
+    syncWorkspaceLayout(state.lastChartHeight);
+    syncStateToUrl(state);
+    setStatus("Ready", "ok");
+  } catch (error) {
+    if (renderToken === figureRenderToken) {
+      figureController.setError("Chart render failed");
+      showUiError(error.message || "Chart render failed.");
+      setStatus("Error", "warn");
+    }
+    throw error;
+  } finally {
+    if (renderToken === figureRenderToken) {
+      setShellBusy(false, "Sankey diagram ready");
+    }
+  }
+}
+
+async function loadFigure(options = {}) {
+  if (options.immediate) {
+    window.clearTimeout(loadDebounceTimer);
+    return runFigureLoad(options);
+  }
+  window.clearTimeout(loadDebounceTimer);
+  return new Promise((resolve, reject) => {
+    loadDebounceTimer = window.setTimeout(() => {
+      runFigureLoad(options).then(resolve).catch(reject);
+    }, options.delayMs ?? 180);
   });
-  if (!response.ok) {
-    const payload = await response.json().catch(() => ({ detail: "Request failed" }));
-    throw new Error(payload.detail || "Request failed");
-  }
-  const payload = await response.json();
-  if (renderToken !== figureRenderToken) {
-    return;
-  }
-  state.metal = payload.metal;
-  state.cobaltMode = payload.cobaltMode || state.cobaltMode;
-  state.resultMode = payload.resultMode;
-  state.accessMode = payload.accessMode || state.accessMode;
-  syncS7DisplayFromPayload(payload);
-  renderThemeButtons();
-  renderMetalButtons();
-  renderCobaltModeButtons();
-  renderAccessControls();
-  renderResultButtons();
-  renderS7DisplayControls();
-  renderS7DisplayControls();
-  const layoutState = currentLayoutState();
-  layoutState.sortModes = {
-    ...layoutState.sortModes,
-    ...(payload.sortModes || {}),
-  };
-  layoutState.specialPositions = {
-    ...layoutState.specialPositions,
-    ...(payload.specialPositions || {}),
-  };
-  layoutState.aggregateCounts = {
-    ...layoutState.aggregateCounts,
-    ...(payload.aggregateCounts || {}),
-  };
-  state.referenceQty = payload.referenceQuantity;
-  state.lastStageControls = payload.stageControls || {};
-  document.getElementById("reference-qty-input").value = Math.round(payload.referenceQuantity);
-  const optimizationLabel = payload.resultMode === "first_optimization" ? "with flow optimization" : "without flow optimization";
-  const cobaltSuffix = payload.metal === "Co" ? ` (${cobaltModeLabel(state.cobaltMode)} scenario)` : "";
-  document.getElementById("chart-title").textContent =
-    `The Sankey Diagram for ${payload.metal} in ${payload.year} ${optimizationLabel}${cobaltSuffix}`;
-  updateStateChips(payload);
-  renderSummary(payload.stageSummary);
-  renderNotes(payload.notes);
-  renderDatasetStatus(payload.datasetStatus);
-  renderOrderBoard(payload.stageControls);
-  renderTables(payload.tables);
-  document.getElementById("table-status").textContent =
-    state.accessMode === "guest"
-        ? "Guest view: diagnostics preview is locked. Unlock Analyst mode for values and drilldowns."
-      : state.resultMode === "baseline"
-        ? `Diagnostics: Original only. Switch to First Optimization for optimizer-stage summaries.`
-        : `Diagnostics: ${resultModeLabel(payload.resultMode)} stage summaries, bounds, source scaling, and coefficient explorers.`;
-  state.lastChartHeight = Number(payload.figure?.layout?.height || 0);
-  await renderChartFigure(payload.figure);
-  if (renderToken !== figureRenderToken) {
-    return;
-  }
-  syncWorkspaceLayout(state.lastChartHeight);
-  setStatus("Ready", "ok");
 }
 
 function parseReferenceQuantity() {
@@ -836,6 +889,31 @@ function buildOrderStageEditor(stage, config, grid) {
   return card;
 }
 
+function syncOrderStudioDetailHeight(shell = orderLayoutShell, rail = orderLayoutRail) {
+  if (!shell || !rail || !shell.isConnected || !rail.isConnected) {
+    return;
+  }
+
+  const applyHeight = () => {
+    if (!shell.isConnected || !rail.isConnected) {
+      return;
+    }
+    if (window.matchMedia("(max-width: 1180px)").matches) {
+      shell.style.removeProperty("--order-rail-height");
+      return;
+    }
+    const railHeight = Math.ceil(rail.getBoundingClientRect().height || 0);
+    if (railHeight > 0) {
+      shell.style.setProperty("--order-rail-height", `${railHeight}px`);
+    }
+  };
+
+  window.requestAnimationFrame(() => {
+    applyHeight();
+    window.requestAnimationFrame(applyHeight);
+  });
+}
+
 function renderOrderBoard(stageControls) {
   const grid = document.getElementById("order-grid");
   grid.innerHTML = "";
@@ -886,6 +964,9 @@ function renderOrderBoard(stageControls) {
   shell.appendChild(rail);
   shell.appendChild(detail);
   grid.appendChild(shell);
+  orderLayoutShell = shell;
+  orderLayoutRail = rail;
+  syncOrderStudioDetailHeight(shell, rail);
 }
 
 async function applySortModeToAll(sortMode) {
@@ -2351,6 +2432,13 @@ function renderDiagnosticExplorerSections(focusId = "") {
   }
 }
 
+function queueDiagnosticExplorerRender(focusId = "") {
+  window.clearTimeout(diagnosticSearchTimer);
+  diagnosticSearchTimer = window.setTimeout(() => {
+    renderDiagnosticExplorerSections(focusId);
+  }, 180);
+}
+
 function bindDiagnosticExplorerControls() {
   document.querySelectorAll("[data-filter]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -2378,7 +2466,7 @@ function bindDiagnosticExplorerControls() {
     coefficientSearch.addEventListener("input", (event) => {
       state.diagnosticFilters.coefficientSearch = event.target.value;
       state.diagnosticFilters.selectedCoefficientKey = "";
-      renderDiagnosticExplorerSections("coefficient-search");
+      queueDiagnosticExplorerRender("coefficient-search");
     });
   }
 
@@ -2386,7 +2474,7 @@ function bindDiagnosticExplorerControls() {
   if (tradeSearch) {
     tradeSearch.addEventListener("input", (event) => {
       state.diagnosticFilters.tradeSearch = event.target.value;
-      renderDiagnosticExplorerSections("trade-search");
+      queueDiagnosticExplorerRender("trade-search");
     });
   }
 }
@@ -2438,11 +2526,8 @@ function renderTables(tables) {
 }
 
 async function bootstrap() {
-  const response = await fetch("/api/bootstrap");
-  if (!response.ok) {
-    throw new Error("Failed to load bootstrap metadata.");
-  }
-  const payload = await response.json();
+  const payload = await apiClient.getBootstrap();
+  const metadata = payload.metadata;
   state.themes = payload.metadata.themes;
   state.metals = payload.metadata.metals;
   state.metal = payload.metadata.defaultMetal;
@@ -2466,6 +2551,11 @@ async function bootstrap() {
   state.referenceQtyDefaults = payload.metadata.defaultReferenceQuantities || state.referenceQtyDefaults;
   state.referenceQty = state.referenceQtyDefaults[state.metal] || payload.metadata.defaultReferenceQuantity;
   state.year = payload.metadata.defaultYear || state.years[state.years.length - 1];
+  const params = new URLSearchParams(window.location.search);
+  hydrateStateFromUrl(state, metadata);
+  if (!params.has("ref")) {
+    state.referenceQty = state.referenceQtyDefaults[state.metal] || payload.metadata.defaultReferenceQuantity;
+  }
   ensureLayoutState(state.metal, state.resultMode, state.cobaltMode);
   document.getElementById("reference-qty-input").value = Math.round(state.referenceQty);
   applyTheme(state.theme);
@@ -2488,13 +2578,13 @@ async function bootstrap() {
     if (!parseReferenceQuantity()) {
       return;
     }
-    await loadFigure();
+    await loadFigure({ immediate: true, force: true });
   });
   document.getElementById("reference-qty-input").addEventListener("change", async () => {
     if (!parseReferenceQuantity()) {
       return;
     }
-    await loadFigure();
+    await loadFigure({ immediate: true });
   });
   document.getElementById("reference-qty-input").addEventListener("keydown", async (event) => {
     if (event.key !== "Enter") {
@@ -2504,7 +2594,7 @@ async function bootstrap() {
     if (!parseReferenceQuantity()) {
       return;
     }
-    await loadFigure();
+    await loadFigure({ immediate: true });
   });
   document.getElementById("download-btn").addEventListener("click", async () => {
     await Plotly.downloadImage(document.getElementById("chart"), {
@@ -2529,6 +2619,12 @@ async function bootstrap() {
       event.stopPropagation();
     });
   });
+  window.addEventListener(
+    "resize",
+    debounce(() => {
+      syncOrderStudioDetailHeight();
+    }, 160),
+  );
   document.getElementById("s7-country-btn")?.addEventListener("click", async () => {
     await updateS7Display({ country: !state.s7Display.country });
   });
@@ -2559,7 +2655,7 @@ async function bootstrap() {
       showUiError(error.message, "Access denied");
     }
   });
-  await loadFigure();
+  await loadFigure({ immediate: true, force: true });
 }
 
 function renderResultButtons() {

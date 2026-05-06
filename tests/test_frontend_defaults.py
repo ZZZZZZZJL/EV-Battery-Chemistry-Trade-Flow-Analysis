@@ -11,6 +11,8 @@ class FrontendDefaultTests(unittest.TestCase):
     def test_frontend_uses_single_default_app_script(self) -> None:
         template = (ROOT / "src" / "trade_flow" / "web" / "templates" / "index.html").read_text(encoding="utf-8")
         self.assertNotIn("year_transition.js", template)
+        self.assertIn('type="module" src="/static/js/app.js', template)
+        self.assertNotIn("position-override-input", template)
 
     def test_app_js_does_not_reference_custom_year_transition_helper(self) -> None:
         app_js = (ROOT / "src" / "trade_flow" / "web" / "static" / "js" / "app.js").read_text(encoding="utf-8")
@@ -21,6 +23,21 @@ class FrontendDefaultTests(unittest.TestCase):
     def test_custom_year_transition_helper_file_is_removed(self) -> None:
         helper_path = ROOT / "src" / "trade_flow" / "web" / "static" / "js" / "year_transition.js"
         self.assertFalse(helper_path.exists())
+
+    def test_frontend_interaction_modules_exist(self) -> None:
+        js_root = ROOT / "src" / "trade_flow" / "web" / "static" / "js"
+        for filename in (
+            "app_state.js",
+            "api_client.js",
+            "figure_controller.js",
+            "ui_shell.js",
+        ):
+            self.assertTrue((js_root / filename).exists(), filename)
+
+    def test_api_client_uses_abort_controller(self) -> None:
+        api_client_js = (ROOT / "src" / "trade_flow" / "web" / "static" / "js" / "api_client.js").read_text(encoding="utf-8")
+        self.assertIn("AbortController", api_client_js)
+        self.assertIn("figureCache", api_client_js)
 
 
 if __name__ == "__main__":

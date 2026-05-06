@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>EV Battery Critical Mineral Supply Chain Analysis</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="/static/css/app.css?v=2304" />
+    <link rel="stylesheet" href="/static/css/app.css?v=2400" />
   </head>
   <body>
     <main class="page-shell">
@@ -124,6 +124,7 @@
             </div>
             <div id="status-pill" class="status-pill">Loading</div>
           </div>
+          <div id="chart-live-status" class="sr-only" aria-live="polite"></div>
           <div id="summary-grid" class="summary-grid"></div>
           <div class="chart-frame">
             <div class="chart-grid"></div>
@@ -208,6 +209,6 @@
     </main>
 
     <script src="/assets/plotly.min.js"></script>
-    <script src="/static/js/app.js?v=2304"></script>
+    <script type="module" src="/static/js/app.js?v=2400"></script>
   </body>
 </html>

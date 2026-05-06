@@ -37,6 +37,12 @@ Deploy public code from GitHub while mounting a private runtime bundle disk on R
 2. Let Render redeploy.
 3. Do not touch the bundle if schema and runtime contract did not change.
 4. Run smoke checks.
+5. For front-end interaction updates, also verify:
+   - the initial page shell loads before the Sankey chart finishes rendering
+   - selector changes show a chart loading overlay instead of a full-page refresh
+   - fast metal/year/result switching does not let an older chart overwrite the latest selection
+   - Advanced controls open smoothly and node position overrides only request the backend on Apply or Reset
+   - guest mode still hides diagnostics and analyst mode still requires `BATTERY_SITE_ANALYST_PASSWORD`
 
 ## Data-Only Update
 

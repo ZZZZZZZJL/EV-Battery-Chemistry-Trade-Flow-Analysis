@@ -18,6 +18,9 @@ class ApiBootstrapTests(unittest.TestCase):
         self.assertIn("first_optimization", metadata["resultModes"])
         self.assertEqual(metadata["defaultMetal"], "Ni")
         self.assertEqual(metadata["defaultYear"], 2024)
+        self.assertIn("runtime", metadata)
+        self.assertNotIn("figure", payload)
+        self.assertNotIn("tables", payload)
 
 
 if __name__ == "__main__":

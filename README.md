@@ -79,6 +79,7 @@ E:\zjl\CMU\research\website\.venv\Scripts\python.exe -B scripts\smoke_test_app.p
 
 - `docs/architecture/repo-layout-and-file-responsibilities.md`
 - `docs/architecture/system-overview.md`
+- `docs/architecture/front-end-interaction-architecture.md`
 - `docs/architecture/public-private-boundary.md`
 - `docs/architecture/metal-extension-model.md`
 - `docs/architecture/runtime-bundle-spec.md`

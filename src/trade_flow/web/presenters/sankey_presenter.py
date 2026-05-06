@@ -55,6 +55,13 @@ def build_bootstrap_payload() -> dict:
             "defaultReferenceQuantity": DEFAULT_REFERENCE_QTY,
             "defaultReferenceQuantities": DEFAULT_REFERENCE_QTY_BY_METAL,
             "defaultAccessMode": DEFAULT_ACCESS_MODE,
+            "runtime": {
+                "cacheVersion": f"metals-{len(repo.metals)}-years-{min(repo.years)}-{max(repo.years)}",
+                "manifestSummary": {
+                    "metalCount": len(repo.metals),
+                    "yearCount": len(repo.years),
+                },
+            },
         }
     }
 
