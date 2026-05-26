@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>EV Battery Critical Mineral Supply Chain Analysis</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="/static/css/app.css?v=2400" />
+    <link rel="stylesheet" href="/static/css/app.css?v=2431" />
   </head>
   <body>
     <main class="page-shell">
@@ -13,7 +13,7 @@
         <div class="hero-head">
           <div class="hero-copy">
             <h1>EV Battery Chemistry Trade Flow Analysis</h1>
-            <p class="lede">Trace critical-mineral supply-chain flows from mining to cathode production, then compare the Original export with the synchronized First Optimization runtime snapshot.</p>
+            <p class="lede">Trace critical-mineral supply-chain flows from mining to cathode production, then compare the Original export with selected normalized optimization snapshots.</p>
             <div class="hero-credit" aria-label="Project credits">
               <span class="hero-credit-item">
                 <span class="hero-credit-label">Author</span>
@@ -29,44 +29,75 @@
       </section>
 
       <header class="top-navigation" aria-label="Top navigation and controls">
-        <details id="top-nav-details" class="top-nav-details">
-          <summary class="top-nav-summary">
+        <div id="top-nav-details" class="top-nav-details">
+          <div class="top-nav-summary">
             <div class="top-nav-selection-group">
               <span class="top-nav-label">Selection</span>
-              <div id="state-chip-row" class="state-chip-row" aria-label="Current data state">
-                <span class="state-chip">Ni</span>
-                <span class="state-chip">2024</span>
-                <span class="state-chip">Original</span>
+              <div id="state-chip-row" class="state-chip-row selection-menu-row" aria-label="Current data state">
+                <div id="metal-selection-menu" class="selection-menu">
+                  <button class="state-chip selection-trigger" type="button" data-selection-menu-trigger="metal" aria-expanded="false" aria-controls="metal-buttons">
+                    <span>Metal</span>
+                    <strong id="metal-selection-value">Ni</strong>
+                  </button>
+                  <div id="metal-buttons" class="selection-menu-panel pill-row" role="menu" aria-label="Metal options"></div>
+                </div>
+                <div id="year-selection-menu" class="selection-menu">
+                  <button class="state-chip selection-trigger" type="button" data-selection-menu-trigger="year" aria-expanded="false" aria-controls="year-buttons">
+                    <span>Year</span>
+                    <strong id="year-selection-value">2024</strong>
+                  </button>
+                  <div id="year-buttons" class="selection-menu-panel pill-row" role="menu" aria-label="Year options"></div>
+                </div>
+                <div id="result-selection-menu" class="selection-menu">
+                  <button class="state-chip selection-trigger" type="button" data-selection-menu-trigger="result" aria-expanded="false" aria-controls="result-buttons">
+                    <span>Result</span>
+                    <strong id="result-selection-value">Original</strong>
+                  </button>
+                  <div id="result-buttons" class="selection-menu-panel pill-row" role="menu" aria-label="Result options"></div>
+                </div>
+                <div id="cobalt-mode-block" class="selection-menu is-hidden">
+                  <button class="state-chip selection-trigger" type="button" data-selection-menu-trigger="cobalt" aria-expanded="false" aria-controls="cobalt-mode-buttons">
+                    <span>Co Scenario</span>
+                    <strong id="cobalt-selection-value">Middle</strong>
+                  </button>
+                  <div id="cobalt-mode-buttons" class="selection-menu-panel pill-row" role="menu" aria-label="Cobalt scenario options"></div>
+                </div>
               </div>
             </div>
             <div class="top-nav-function-group">
               <span class="top-nav-label">Workspace</span>
               <nav class="section-nav top-nav-primary" aria-label="Page sections">
-                <a href="#diagram-board">Sankey Diagram</a>
-                <a href="#order-board">Order Studio</a>
-                <a href="#data-board">Diagnostics</a>
+                <a class="nav-action-link workspace-view-link" data-workspace-view="sankey" href="#diagram-board">
+                  Sankey Diagram
+                </a>
+                <div id="analysis-workspace-menu" class="selection-menu workspace-menu">
+                  <button class="nav-action-link selection-trigger workspace-menu-trigger" type="button" data-selection-menu-trigger="analysis-workspace" aria-expanded="false" aria-controls="analysis-workspace-options">
+                    <span>Analysis</span>
+                    <strong id="analysis-workspace-value">Choose</strong>
+                  </button>
+                  <div id="analysis-workspace-options" class="selection-menu-panel analysis-workspace-panel" role="menu" aria-label="Analysis options">
+                    <a class="workspace-menu-option" data-workspace-view="analysis" href="#data-board" role="menuitem">
+                      <strong>Conversion Factor Optimization</strong>
+                      <span>Stage summaries, coefficient explorer, and optimization flow changes</span>
+                    </a>
+                    <a class="workspace-menu-option" data-workspace-view="vulnerability" href="#vulnerability-board" role="menuitem">
+                      <strong>Vulnerability Index</strong>
+                      <span>Country exposure, method cases, and baseline deltas</span>
+                    </a>
+                  </div>
+                </div>
               </nav>
             </div>
-            <span class="top-nav-toggle">Controls</span>
-          </summary>
-          <div class="top-nav-panel">
-            <section class="control-dock" aria-label="Access and visualization controls">
-              <div class="control-dock-main">
-                <div class="dock-group dock-group-metal">
-                  <span class="control-label">Metal</span>
-                  <div id="metal-buttons" class="pill-row"></div>
-                </div>
-                <div class="dock-group dock-group-year">
-                  <span class="control-label">Year</span>
-                  <div id="year-buttons" class="pill-row"></div>
-                </div>
-                <div id="cobalt-mode-block" class="dock-group dock-group-cobalt is-hidden">
-                  <span class="control-label">Co Scenario</span>
-                  <div id="cobalt-mode-buttons" class="pill-row"></div>
-                </div>
-                <div class="dock-group dock-group-result">
-                  <span class="control-label">Result</span>
-                  <div id="result-buttons" class="pill-row"></div>
+            <button id="top-nav-controls-toggle" class="top-nav-toggle" type="button" aria-expanded="true" aria-controls="top-nav-panel" aria-label="Toggle controls">
+              <span class="top-nav-toggle-icon" aria-hidden="true"></span>
+            </button>
+          </div>
+          <div id="top-nav-panel" class="top-nav-panel">
+            <section class="control-dock normal-controls" aria-label="Access and visualization controls">
+              <div class="normal-controls-grid">
+                <div class="control-block control-block-theme">
+                  <span class="control-label">Theme</span>
+                  <div id="theme-buttons" class="pill-row"></div>
                 </div>
                 <div class="dock-group dock-group-s7">
                   <span class="control-label">S7 Display</span>
@@ -76,43 +107,29 @@
                     <button id="s7-aggregate-btn" class="pill-btn" type="button" aria-pressed="false">Merge NMC/NCA</button>
                   </div>
                 </div>
-                <div class="dock-actions">
-                  <button id="refresh-btn" class="primary-btn" type="button">Refresh View</button>
-                  <button id="download-btn" class="ghost-btn" type="button">Export PNG</button>
+                <div class="control-block control-block-reference">
+                  <label class="control-label" for="reference-qty-input">Reference Qty (t)</label>
+                  <input id="reference-qty-input" class="text-input" type="number" min="1" step="1000" />
                 </div>
+                <div class="control-block control-block-access">
+                  <span class="control-label">Access</span>
+                  <div id="access-mode-buttons" class="pill-row"></div>
+                  <form id="access-password-form" class="access-password-form" autocomplete="off">
+                    <div id="access-password-wrap" class="access-password-wrap is-hidden">
+                      <input class="sr-only" type="text" name="username" autocomplete="username" tabindex="-1" aria-hidden="true" value="analyst" />
+                      <input id="access-password-input" class="text-input" type="password" placeholder="Enter password" autocomplete="current-password" />
+                      <button id="access-unlock-btn" class="primary-btn" type="button">Unlock</button>
+                    </div>
+                  </form>
+                  <p id="access-note" class="inline-note">Guest mode is the default. Non-guest mode reveals analysis and production values after password verification.</p>
+                </div>
+                <button id="refresh-btn" class="primary-btn control-action-btn control-action-refresh" type="button">Refresh View</button>
+                <button id="download-btn" class="ghost-btn control-action-btn control-action-export" type="button">Export PNG</button>
               </div>
-              <details class="advanced-panel">
-                <summary>Advanced controls</summary>
-                <div class="advanced-grid">
-                  <div class="control-block control-block-access">
-                    <span class="control-label">Access</span>
-                    <div id="access-mode-buttons" class="pill-row"></div>
-                    <form id="access-password-form" class="access-password-form" autocomplete="off">
-                      <div id="access-password-wrap" class="access-password-wrap is-hidden">
-                        <input class="sr-only" type="text" name="username" autocomplete="username" tabindex="-1" aria-hidden="true" value="analyst" />
-                        <input id="access-password-input" class="text-input" type="password" placeholder="Enter password" autocomplete="current-password" />
-                        <button id="access-unlock-btn" class="primary-btn" type="button">Unlock</button>
-                      </div>
-                    </form>
-                    <p id="access-note" class="inline-note">Guest mode is the default. Non-guest mode reveals diagnostics and production values after password verification.</p>
-                  </div>
-                  <div class="control-block control-block-theme">
-                    <span class="control-label">Theme</span>
-                    <div id="theme-buttons" class="pill-row"></div>
-                    <p class="inline-note">Switch between the dark research surface and the white-background reading mode.</p>
-                  </div>
-                  <div class="control-block control-block-reference">
-                    <label class="control-label" for="reference-qty-input">Reference Quantity (t)</label>
-                    <input id="reference-qty-input" class="text-input" type="number" min="1" step="1000" />
-                    <p class="inline-note">Reference quantity changes node-height scaling without rebuilding the published flows.</p>
-                  </div>
-                  <p id="metal-note" class="inline-note control-note-wide">Ni, Li, and Co are active datasets for this optimization viewer.</p>
-                  <p id="cobalt-mode-note" class="inline-note control-note-wide">Middle, Max, and Min switch cobalt refining-side scenario bounds when cobalt is selected.</p>
-                </div>
-              </details>
+              <p id="cobalt-mode-note" class="inline-note control-note-wide">Middle, Max, and Min switch cobalt refining-side scenario bounds when cobalt is selected.</p>
             </section>
           </div>
-        </details>
+        </div>
       </header>
 
       <section id="diagram-board" class="workspace">
@@ -122,7 +139,17 @@
               <p class="eyebrow">Diagram</p>
               <h2 id="chart-title">Ni 7-Step Supply Chain</h2>
             </div>
-            <div id="status-pill" class="status-pill">Loading</div>
+            <div class="section-head-actions">
+              <a id="order-studio-jump" class="nav-action-link section-action-link" href="#order-board">
+                <svg class="nav-action-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M8 11V6.5a2 2 0 0 1 4 0V11" />
+                  <path d="M12 10V8a2 2 0 0 1 4 0v3" />
+                  <path d="M16 11V9.5a2 2 0 0 1 4 0V15a6 6 0 0 1-6 6h-2.2a5 5 0 0 1-4.2-2.3L4.3 14a1.8 1.8 0 0 1 2.8-2.2L9 14" />
+                </svg>
+                Order Studio
+              </a>
+              <div id="status-pill" class="status-pill">Loading</div>
+            </div>
           </div>
           <div id="chart-live-status" class="sr-only" aria-live="polite"></div>
           <div id="summary-grid" class="summary-grid"></div>
@@ -153,10 +180,10 @@
       <section id="data-board" class="order-board">
         <div class="section-head">
           <div>
-            <p class="eyebrow">Diagnostics</p>
-            <h2>Optimization Diagnostics</h2>
+            <p class="eyebrow">Analysis</p>
+            <h2>Optimization Analysis</h2>
           </div>
-          <div id="table-status" class="status-pill order-note">Diagnostics respond to the selected result mode.</div>
+          <div id="table-status" class="status-pill order-note">Analysis responds to the selected result mode.</div>
         </div>
         <div class="table-grid">
           <section class="table-card table-card-wide table-card-snapshot">
@@ -172,7 +199,7 @@
             <div class="order-card-head">
               <div>
                 <strong>Stage Comparison And Unknown Nodes</strong>
-                <span>Original versus First Optimization totals, split by each S1-S2-S3 style stage group and unknown-node type</span>
+                <span>Original versus selected optimization totals, split by each S1-S2-S3 style stage group and unknown-node type</span>
               </div>
             </div>
             <div id="stage-table" class="table-host"></div>
@@ -199,16 +226,47 @@
             <div class="order-card-head">
               <div>
                 <strong>Trade Flow Explorer</strong>
-                <span>Compare Original and First Optimization flows by stage group, source, target, special-node type, and change status.</span>
+                <span>Compare Original and selected optimization flows by stage group, source, target, special-node type, and change status.</span>
               </div>
             </div>
             <div id="trade-flow-table" class="table-host"></div>
           </section>
         </div>
       </section>
+
+      <section id="vulnerability-board" class="order-board vulnerability-board" hidden>
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Analysis</p>
+            <h2>Vulnerability Index</h2>
+          </div>
+          <div id="vulnerability-status" class="status-pill order-note">Vulnerability summary follows the selected metal, year, and result.</div>
+        </div>
+        <div class="table-grid vulnerability-grid">
+          <section class="table-card table-card-wide vulnerability-trend-card">
+            <div class="order-card-head vulnerability-trend-toolbar">
+              <div class="vulnerability-trend-title">
+                <strong>Country VI</strong>
+                <span>Stage exposure bars, case comparison, and time trends share one country, pair, and year scope.</span>
+              </div>
+            </div>
+            <div id="vulnerability-case-guide" class="vulnerability-case-guide"></div>
+            <div id="vulnerability-trend-charts" class="table-host"></div>
+          </section>
+          <section class="table-card table-card-wide vulnerability-sensitivity-card">
+            <div class="order-card-head">
+              <div>
+                <strong>VI Sensitivity Lab</strong>
+                <span>Non-Guest scenario sandbox for multi-country production edits and exact VI recomputation.</span>
+              </div>
+            </div>
+            <div id="vulnerability-sensitivity-panel" class="table-host"></div>
+          </section>
+        </div>
+      </section>
     </main>
 
     <script src="/assets/plotly.min.js"></script>
-    <script type="module" src="/static/js/app.js?v=2400"></script>
+    <script type="module" src="/static/js/app.js?v=2431"></script>
   </body>
 </html>

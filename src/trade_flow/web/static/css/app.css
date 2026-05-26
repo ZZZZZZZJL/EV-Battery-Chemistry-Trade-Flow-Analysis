@@ -25,6 +25,7 @@
   --accent-soft: #7bb88b;
   --status-bg: rgba(123, 184, 139, 0.12);
   --status-text: #d7f3db;
+  --success-bg: rgba(123, 184, 139, 0.14);
   --success-text: #d7f3db;
   --warning-text: #f5c69a;
   --tail-text: #ffd9bc;
@@ -54,6 +55,7 @@ body[data-theme="light"] {
   --button-border-strong: rgba(91, 70, 52, 0.22);
   --status-bg: rgba(207, 141, 82, 0.18);
   --status-text: #5f3716;
+  --success-bg: rgba(123, 184, 139, 0.16);
   --success-text: #1f5c34;
   --warning-text: #9a4d11;
   --tail-text: #7d3e13;
@@ -316,6 +318,11 @@ textarea {
   display: none !important;
 }
 
+[hidden],
+.workspace-view-hidden {
+  display: none !important;
+}
+
 .control-label {
   font-size: 0.8rem;
   text-transform: uppercase;
@@ -364,6 +371,72 @@ textarea {
 .pill-btn.active {
   background: linear-gradient(135deg, rgba(207, 141, 82, 0.22), rgba(123, 184, 139, 0.2));
   border-color: var(--button-border-strong);
+}
+
+.result-picker {
+  align-items: flex-start;
+  overflow: visible;
+}
+
+.optimization-result-wrapper {
+  position: relative;
+  display: inline-flex;
+}
+
+.optimization-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.optimization-toggle::after {
+  content: "";
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid currentColor;
+  transition: transform 160ms ease;
+}
+
+.optimization-toggle[aria-expanded="true"]::after {
+  transform: rotate(180deg);
+}
+
+.optimization-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 90;
+  display: none;
+  min-width: 220px;
+  padding: 6px;
+  border: 1px solid var(--button-border);
+  border-radius: var(--radius);
+  background: var(--panel-strong);
+  box-shadow: 0 14px 34px rgba(15, 12, 9, 0.16);
+}
+
+.optimization-menu.is-open {
+  display: grid;
+  gap: 4px;
+}
+
+.optimization-choice {
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: calc(var(--radius) - 2px);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.optimization-choice:hover,
+.optimization-choice.active {
+  border-color: var(--button-border-strong);
+  background: var(--panel-soft);
 }
 
 .pill-btn.disabled,
@@ -635,11 +708,30 @@ textarea {
 
 .aggregate-control {
   display: grid;
+  grid-template-columns: minmax(150px, 220px) minmax(220px, 1fr);
   gap: 8px;
   margin-bottom: 14px;
   padding: 12px;
   border: 1px solid var(--line-soft);
   background: var(--panel-soft);
+}
+
+.aggregate-count-panel,
+.aggregate-preserve-panel {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  min-width: 0;
+}
+
+.aggregate-preserve-panel {
+  padding: 10px;
+  border: 1px solid var(--line-soft);
+  background: var(--panel-softest);
+}
+
+.aggregate-preserve-panel.is-muted {
+  opacity: 0.72;
 }
 
 .special-control {
@@ -664,7 +756,7 @@ textarea {
 }
 
 .aggregate-input {
-  width: 100%;
+  width: min(100%, 140px);
   padding: 10px 12px;
   border: 1px solid var(--input-border);
   background: var(--panel-softest);
@@ -681,6 +773,46 @@ textarea {
   color: var(--muted);
   font-size: 0.86rem;
   line-height: 1.5;
+}
+
+.preserve-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 32px;
+  align-items: flex-start;
+}
+
+.preserve-chip,
+.preserve-empty {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 5px 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  background: var(--panel-soft);
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.preserve-chip {
+  color: var(--success-text);
+  background: var(--success-bg);
+}
+
+.preserve-chip button {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  background: var(--panel-softest);
+  color: var(--muted);
+  cursor: pointer;
+  line-height: 1;
 }
 
 .order-item {
@@ -737,6 +869,11 @@ textarea {
   background: var(--tail-bg);
 }
 
+.order-item.preserved-item {
+  border-color: rgba(46, 125, 92, 0.3);
+  background: var(--success-bg);
+}
+
 .order-item-label {
   flex: 1;
   min-width: 0;
@@ -749,7 +886,34 @@ textarea {
   white-space: nowrap;
 }
 
+.order-item-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.order-keep-toggle {
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  background: var(--panel-softest);
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+
+.order-keep-toggle[aria-pressed="true"] {
+  border-color: rgba(46, 125, 92, 0.35);
+  background: var(--success-bg);
+  color: var(--success-text);
+}
+
 .tail-badge,
+.preserve-badge,
 .group-heading {
   display: inline-flex;
   align-items: center;
@@ -764,6 +928,11 @@ textarea {
 .tail-badge {
   color: var(--tail-text);
   background: var(--tail-bg);
+}
+
+.preserve-badge {
+  color: var(--success-text);
+  background: var(--success-bg);
 }
 
 .group-heading {
@@ -838,6 +1007,33 @@ textarea {
 
 .table-card-setup {
   grid-column: span 5;
+}
+
+.analysis-board-locked .table-card:not(.table-card-snapshot) {
+  display: none;
+}
+
+.analysis-board-locked .table-card-snapshot {
+  grid-column: 1 / -1;
+}
+
+.analysis-lock-panel {
+  display: grid;
+  gap: 8px;
+  padding: 22px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: var(--panel-softest);
+}
+
+.analysis-lock-panel strong {
+  font-family: var(--font-display);
+  font-size: 1.1rem;
+}
+
+.analysis-lock-panel span {
+  color: var(--muted);
+  line-height: 1.5;
 }
 
 .table-host {
@@ -2125,6 +2321,60 @@ body::before {
   font-size: 0.9rem;
 }
 
+.nav-action-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 9px 13px;
+  border: 1px solid var(--button-border);
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, var(--panel-softest), var(--panel-soft));
+  color: var(--text);
+  text-decoration: none;
+  font-size: 0.9rem;
+  font-weight: 600;
+  line-height: 1;
+  box-shadow: 0 10px 24px rgba(15, 12, 9, 0.06);
+  transition:
+    transform 160ms ease,
+    border-color 160ms ease,
+    background 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.nav-action-link:hover {
+  transform: translateY(-1px);
+  border-color: var(--button-border-strong);
+  background: linear-gradient(180deg, var(--panel-strong), var(--panel-soft));
+  box-shadow: 0 14px 30px rgba(15, 12, 9, 0.1);
+}
+
+.nav-action-link:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent-soft) 62%, transparent);
+  outline-offset: 2px;
+}
+
+.nav-action-link.active,
+.nav-action-link[aria-current="page"] {
+  border-color: rgba(123, 184, 139, 0.34);
+  background: linear-gradient(135deg, rgba(123, 184, 139, 0.18), var(--panel-soft));
+  color: var(--text);
+}
+
+.nav-action-icon {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.78;
+}
+
 .control-dock {
   position: sticky;
   top: 0;
@@ -2224,6 +2474,11 @@ body::before {
 }
 
 .workspace {
+  scroll-margin-top: 108px;
+}
+
+#order-board,
+#data-board {
   scroll-margin-top: 108px;
 }
 
@@ -2373,6 +2628,10 @@ details.order-card > .order-card-head::after {
     padding: 10px;
   }
 
+  .aggregate-control {
+    grid-template-columns: 1fr;
+  }
+
   .hero {
     margin-bottom: 10px;
     padding: 18px;
@@ -2473,7 +2732,7 @@ details.order-card > .order-card-head::after {
   -webkit-backdrop-filter: var(--surface-blur);
   backdrop-filter: var(--surface-blur);
   box-shadow: 0 16px 42px rgba(15, 12, 9, 0.13);
-  overflow: hidden;
+  overflow: visible;
 }
 
 .top-nav-summary {
@@ -2521,22 +2780,51 @@ details.order-card > .order-card-head::after {
 .top-nav-toggle {
   margin-left: auto;
   justify-self: end;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 32px;
   min-height: 32px;
-  padding: 7px 10px;
+  padding: 0;
   border: 1px solid var(--line-soft);
   border-radius: var(--radius);
   background: var(--panel-softest);
   color: var(--muted);
-  font-size: 0.82rem;
-  font-weight: 600;
+  transition:
+    transform 160ms ease,
+    border-color 160ms ease,
+    background 160ms ease;
 }
 
-.top-nav-details[open] .top-nav-toggle::after {
-  content: " - collapse";
+.top-nav-toggle:hover {
+  transform: translateY(-1px);
+  border-color: var(--button-border-strong);
+  background: var(--panel-strong);
 }
 
-.top-nav-details:not([open]) .top-nav-toggle::after {
-  content: " - open";
+.top-nav-toggle-icon {
+  position: relative;
+  width: 14px;
+  height: 14px;
+}
+
+.top-nav-toggle-icon::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 4px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg);
+  transform-origin: 50% 50%;
+  transition: transform 160ms ease;
+}
+
+.top-nav-details[open] .top-nav-toggle-icon::before {
+  transform: translateY(3px) rotate(225deg);
 }
 
 .top-nav-panel {
@@ -2544,6 +2832,7 @@ details.order-card > .order-card-head::after {
   gap: 10px;
   padding: 0 12px 12px;
   border-top: 1px solid var(--line-soft);
+  overflow: visible;
 }
 
 .top-navigation .state-chip-row {
@@ -2561,6 +2850,10 @@ details.order-card > .order-card-head::after {
 
 .top-nav-primary a {
   white-space: nowrap;
+}
+
+.top-nav-primary .nav-action-link {
+  padding: 9px 12px;
 }
 
 .top-navigation .control-dock {
@@ -2643,6 +2936,19 @@ details.order-card > .order-card-head::after {
 
 .section-head {
   margin-bottom: 10px;
+}
+
+.section-head-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.section-action-link {
+  min-height: 38px;
+  padding-inline: 12px 14px;
 }
 
 .chart-frame {
@@ -2845,5 +3151,1768 @@ details.order-card > .order-card-head::after {
 
   .chart-frame {
     min-height: 900px;
+  }
+}
+
+/* Selection-chip navigation refresh. */
+.top-nav-summary {
+  cursor: default;
+  justify-content: space-between;
+}
+
+.selection-menu-row {
+  position: relative;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.selection-menu {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+}
+
+.selection-trigger {
+  gap: 8px;
+  cursor: pointer;
+  color: var(--text);
+  font-weight: 700;
+}
+
+.selection-trigger span {
+  color: var(--muted);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.selection-trigger strong {
+  color: var(--text);
+  font-size: 0.86rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.selection-trigger::after {
+  content: "";
+  width: 7px;
+  height: 7px;
+  margin-left: 2px;
+  border-right: 1.8px solid currentColor;
+  border-bottom: 1.8px solid currentColor;
+  opacity: 0.58;
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform 160ms ease;
+}
+
+.selection-menu.is-open .selection-trigger {
+  border-color: var(--button-border-strong);
+  background: linear-gradient(135deg, rgba(123, 184, 139, 0.18), var(--panel-soft));
+}
+
+.selection-menu.is-open .selection-trigger::after {
+  transform: translateY(2px) rotate(225deg);
+}
+
+.selection-menu-panel {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 8px);
+  z-index: 120;
+  display: none;
+  width: max-content;
+  min-width: min(230px, calc(100vw - 32px));
+  max-width: min(360px, calc(100vw - 32px));
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--panel-strong) 96%, transparent);
+  -webkit-backdrop-filter: var(--surface-blur);
+  backdrop-filter: var(--surface-blur);
+  box-shadow: 0 18px 44px rgba(15, 12, 9, 0.18);
+}
+
+.selection-menu.is-open .selection-menu-panel {
+  display: grid;
+  grid-template-columns: 1fr;
+}
+
+.selection-menu-panel .pill-btn {
+  justify-content: flex-start;
+  width: 100%;
+  text-align: left;
+}
+
+#year-buttons.selection-menu-panel {
+  grid-template-columns: repeat(2, minmax(88px, 1fr));
+}
+
+#result-buttons.selection-menu-panel {
+  min-width: 260px;
+}
+
+.workspace-menu {
+  align-items: stretch;
+}
+
+.workspace-menu-trigger {
+  border-color: var(--button-border);
+  background: var(--panel-softest);
+  font-family: var(--font-body);
+}
+
+.workspace-menu-trigger strong {
+  color: var(--text);
+  font-size: 0.84rem;
+}
+
+.workspace-menu.active .workspace-menu-trigger,
+.workspace-menu.is-open .workspace-menu-trigger {
+  border-color: var(--button-border-strong);
+  background: linear-gradient(135deg, rgba(123, 184, 139, 0.16), var(--panel-soft));
+}
+
+.analysis-workspace-panel {
+  box-sizing: border-box;
+  width: min(380px, calc(100vw - 32px));
+  min-width: min(340px, calc(100vw - 32px));
+  gap: 6px;
+}
+
+.workspace-menu-option {
+  box-sizing: border-box;
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: var(--text);
+  text-decoration: none;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+  transform 160ms ease;
+}
+
+.top-nav-primary .workspace-menu-option {
+  white-space: normal;
+}
+
+.workspace-menu-option strong {
+  min-width: 0;
+  font-size: 0.9rem;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.workspace-menu-option span {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.workspace-menu-option:hover,
+.workspace-menu-option.active {
+  border-color: var(--button-border-strong);
+  background: var(--panel-soft);
+  transform: translateY(-1px);
+}
+
+.normal-controls-grid {
+  display: grid;
+  grid-template-columns:
+    minmax(260px, 1.2fr)
+    minmax(145px, 0.7fr)
+    minmax(var(--reference-control-min), 0.9fr)
+    minmax(330px, 1.25fr)
+    minmax(280px, 0.9fr);
+  gap: 10px;
+  align-items: stretch;
+}
+
+.normal-controls-grid .control-block,
+.normal-controls-grid .dock-group,
+.normal-controls-grid .dock-actions {
+  min-width: 0;
+  grid-row: auto;
+}
+
+.normal-controls-grid .control-block-access,
+.normal-controls-grid .control-block-theme,
+.normal-controls-grid .control-block-reference,
+.normal-controls-grid .dock-group-s7,
+.normal-controls-grid .dock-actions {
+  grid-column: auto;
+  grid-row: auto;
+}
+
+.normal-controls-grid .dock-group,
+.normal-controls-grid .dock-actions {
+  padding: 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: var(--panel-softest);
+}
+
+.normal-controls-grid .dock-actions {
+  grid-template-columns: 1fr 1fr;
+  align-content: end;
+  align-items: end;
+}
+
+.normal-controls-grid .control-block-access {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+
+.normal-controls-grid .access-password-form {
+  margin: 0;
+}
+
+.normal-controls-grid .inline-note {
+  margin: 0;
+}
+
+.normal-controls .control-note-wide {
+  margin: 0;
+}
+
+@media (max-width: 1380px) {
+  .normal-controls-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .normal-controls-grid .control-block-access,
+  .normal-controls-grid .dock-group-s7 {
+    grid-column: span 2;
+  }
+
+  .normal-controls-grid .dock-actions {
+    grid-column: span 2;
+  }
+}
+
+@media (max-width: 980px) {
+  .normal-controls-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .normal-controls-grid .control-block-access,
+  .normal-controls-grid .dock-group-s7 {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 720px) {
+  .top-nav-summary {
+    gap: 12px;
+  }
+
+  .selection-menu-row,
+  .top-nav-primary {
+    width: 100%;
+  }
+
+  .selection-menu {
+    flex: 1 1 calc(50% - 6px);
+  }
+
+  .selection-trigger {
+    justify-content: space-between;
+    width: 100%;
+  }
+
+  .selection-menu-panel {
+    left: 0;
+    right: auto;
+  }
+
+  .normal-controls-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .normal-controls-grid .dock-group-s7 {
+    grid-column: 1;
+  }
+}
+
+/* Vulnerability dashboard first release. */
+.vulnerability-board {
+  display: grid;
+  gap: 18px;
+}
+
+.vulnerability-score-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.vulnerability-score-card {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, var(--panel-soft), var(--panel-softest));
+  box-shadow: 0 18px 42px rgba(15, 12, 9, 0.1);
+}
+
+.vulnerability-score-card span,
+.vulnerability-bar-row span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.vulnerability-score-card strong {
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: clamp(1.55rem, 2.3vw, 2.25rem);
+  line-height: 1;
+}
+
+.vulnerability-score-maximumWithUnknown strong {
+  color: var(--warning-text);
+}
+
+.vulnerability-mini-bar,
+.vulnerability-bar,
+.vulnerability-table-bar {
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(128, 111, 93, 0.16);
+}
+
+.vulnerability-mini-bar {
+  height: 7px;
+}
+
+.vulnerability-mini-bar span,
+.vulnerability-bar span,
+.vulnerability-table-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: rgba(123, 184, 139, 0.78);
+}
+
+.vulnerability-score-maximumWithUnknown .vulnerability-mini-bar span {
+  background: rgba(207, 141, 82, 0.78);
+}
+
+.vulnerability-grid .table-card {
+  min-height: auto;
+  min-width: 0;
+}
+
+.vulnerability-grid {
+  align-items: stretch;
+}
+
+.vulnerability-case-grid,
+.vulnerability-method-list {
+  display: grid;
+  gap: 12px;
+}
+
+.vulnerability-case-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.45fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+  padding: 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: var(--panel-softest);
+}
+
+.vulnerability-case-row.active {
+  border-color: var(--button-border-strong);
+  background: linear-gradient(135deg, rgba(123, 184, 139, 0.13), var(--panel-softest));
+}
+
+.vulnerability-case-row > div:first-child {
+  display: grid;
+  gap: 5px;
+}
+
+.vulnerability-case-row > div:first-child strong {
+  color: var(--text);
+  font-family: var(--font-display);
+  line-height: 1.12;
+}
+
+.vulnerability-case-row > div:first-child span,
+.vulnerability-method-list p {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.vulnerability-case-bars {
+  display: grid;
+  gap: 8px;
+}
+
+.vulnerability-bar-row {
+  display: grid;
+  grid-template-columns: minmax(92px, 0.26fr) minmax(120px, 1fr) minmax(64px, auto);
+  gap: 10px;
+  align-items: center;
+}
+
+.vulnerability-bar {
+  height: 8px;
+}
+
+.vulnerability-bar-row strong {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.vulnerability-table {
+  min-width: 720px;
+}
+
+.vulnerability-table th:first-child,
+.vulnerability-table td:first-child {
+  min-width: 84px;
+}
+
+.vulnerability-table td strong {
+  color: var(--text);
+}
+
+.vulnerability-table-bar {
+  height: 6px;
+  margin-top: 7px;
+}
+
+.vulnerability-case-guide {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.vulnerability-case-guide-card {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, var(--panel-softest), rgba(255, 253, 248, 0.72));
+}
+
+.vulnerability-case-guide-card span {
+  color: var(--accent);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.vulnerability-case-guide-card strong {
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  line-height: 1.12;
+}
+
+.vulnerability-case-guide-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
+.vulnerability-method-list p {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: var(--panel-softest);
+}
+
+.vulnerability-country-picker {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.vulnerability-country-picker-compact {
+  width: 100%;
+}
+
+.vulnerability-country-picker span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.vulnerability-country-picker select {
+  width: 100%;
+  min-height: 38px;
+  padding-right: 34px;
+}
+
+.vulnerability-country-tools {
+  display: grid;
+  gap: 8px;
+  justify-self: end;
+  width: min(380px, 100%);
+}
+
+.vulnerability-compare-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+
+.vulnerability-compare-controls .ghost-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 44px;
+  min-height: 44px;
+  padding-block: 0;
+  padding-inline: 14px;
+}
+
+.vulnerability-country-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 24px;
+}
+
+.vulnerability-country-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 3px 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  background: var(--panel-softest);
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.vulnerability-country-chip.is-primary {
+  border-color: color-mix(in srgb, var(--accent-green) 48%, var(--line-soft));
+  color: var(--text);
+}
+
+.vulnerability-country-chip-muted {
+  opacity: 0.72;
+}
+
+.vulnerability-country-chip button {
+  display: inline-grid;
+  place-items: center;
+  width: 17px;
+  height: 17px;
+  border: 0;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+}
+
+.vulnerability-trend-card .order-card-head {
+  align-items: start;
+}
+
+.vulnerability-trend-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
+  gap: 16px;
+  align-items: center;
+}
+
+.vulnerability-trend-title {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.vulnerability-trend-title strong {
+  color: var(--text);
+  font-family: var(--font-display);
+}
+
+.vulnerability-trend-title span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.vulnerability-trend-shell {
+  display: grid;
+  gap: 12px;
+}
+
+.vulnerability-trend-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.vulnerability-trend-legend-deck {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.vulnerability-trend-legend-deck .vulnerability-country-line-legend,
+.vulnerability-trend-legend-deck .vulnerability-trend-legend {
+  min-width: min(100%, 340px);
+}
+
+.vulnerability-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 7px 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: var(--panel-softest);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 700;
+  transition: border-color 160ms ease, background 160ms ease, color 160ms ease, opacity 160ms ease;
+}
+
+.vulnerability-legend-item::before {
+  content: none;
+}
+
+.vulnerability-legend-item.active {
+  border-color: color-mix(in srgb, var(--series-color) 48%, var(--line-soft));
+  color: var(--text);
+  background: color-mix(in srgb, var(--series-color) 9%, var(--panel-softest));
+}
+
+.vulnerability-legend-item.is-muted {
+  opacity: 0.48;
+}
+
+.vulnerability-legend-swatch {
+  content: "";
+  width: 18px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--series-color);
+}
+
+.vulnerability-trend-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.vulnerability-trend-chart {
+  display: grid;
+  grid-template-rows: auto minmax(236px, auto);
+  gap: 8px;
+  min-width: 0;
+  min-height: 282px;
+  padding: 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: var(--panel-softest);
+}
+
+.vulnerability-trend-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.vulnerability-trend-head > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.vulnerability-trend-head strong {
+  color: var(--text);
+  font-family: var(--font-display);
+}
+
+.vulnerability-trend-head span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  text-align: left;
+}
+
+.vulnerability-trend-head .plot-download-btn {
+  flex: 0 0 auto;
+}
+
+.vulnerability-plot-host {
+  width: 100%;
+  height: 236px;
+  min-height: 236px;
+}
+
+.vulnerability-line-chart {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.vulnerability-axis,
+.vulnerability-gridline {
+  stroke: rgba(128, 111, 93, 0.24);
+  stroke-width: 1;
+}
+
+.vulnerability-gridline {
+  stroke-dasharray: 3 5;
+}
+
+.vulnerability-axis-label,
+.vulnerability-year-label {
+  fill: var(--muted);
+  font-size: 0.54rem;
+}
+
+.vulnerability-year-label {
+  text-anchor: middle;
+  font-weight: 700;
+}
+
+.vulnerability-year-label.active {
+  fill: var(--text);
+}
+
+.vulnerability-trend-line {
+  fill: none;
+  stroke-width: 2.1;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.vulnerability-trend-point {
+  stroke: var(--panel-softest);
+  stroke-width: 1.3;
+}
+
+.vulnerability-trend-point.is-current-year {
+  stroke-width: 2;
+}
+
+.vulnerability-trend-baseline {
+  color: #4f6d9a;
+  stroke: currentColor;
+  fill: currentColor;
+}
+
+.vulnerability-trend-pareto {
+  color: #6fa27b;
+  stroke: currentColor;
+  fill: currentColor;
+}
+
+.vulnerability-trend-sn-minimum {
+  color: #b86f43;
+  stroke: currentColor;
+  fill: currentColor;
+}
+
+.vulnerability-trend-deviation {
+  color: #7b6ab0;
+  stroke: currentColor;
+  fill: currentColor;
+}
+
+.vulnerability-sensitivity-card {
+  grid-column: 1 / -1;
+}
+
+.vulnerability-sensitivity-shell {
+  display: grid;
+  gap: 16px;
+}
+
+.vulnerability-sensitivity-controls {
+  display: grid;
+  grid-template-columns: minmax(170px, 1fr) minmax(150px, 0.8fr) minmax(170px, 1fr) minmax(260px, 1.5fr);
+  gap: 12px;
+  align-items: end;
+}
+
+.vulnerability-sensitivity-field {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.vulnerability-sensitivity-field span,
+.vulnerability-sensitivity-summary span,
+.vulnerability-sensitivity-case-head span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.vulnerability-sensitivity-field select,
+.vulnerability-sensitivity-field input {
+  min-height: 38px;
+}
+
+.vulnerability-sensitivity-slider {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) 74px auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.vulnerability-sensitivity-slider input[type="range"] {
+  accent-color: var(--accent-green);
+}
+
+.vulnerability-sensitivity-slider strong {
+  min-width: 46px;
+  color: var(--text);
+  text-align: right;
+}
+
+.vulnerability-sensitivity-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.vulnerability-sensitivity-summary article,
+.vulnerability-sensitivity-case {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: var(--panel-softest);
+}
+
+.vulnerability-sensitivity-summary strong {
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: clamp(1.05rem, 2vw, 1.35rem);
+}
+
+.vulnerability-sensitivity-summary small {
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.vulnerability-sensitivity-case-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.vulnerability-sensitivity-case-head {
+  display: grid;
+  gap: 5px;
+}
+
+.vulnerability-sensitivity-case-head strong {
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+}
+
+.vulnerability-sensitivity-case-head .delta-badge {
+  justify-self: start;
+}
+
+.vulnerability-sensitivity-bars {
+  display: grid;
+  gap: 7px;
+}
+
+.vulnerability-sensitivity-bar-row {
+  display: grid;
+  grid-template-columns: 64px minmax(64px, 1fr) 54px;
+  gap: 8px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.vulnerability-sensitivity-bar-row strong {
+  color: var(--text);
+  text-align: right;
+}
+
+.vulnerability-sensitivity-bar span {
+  background: var(--accent-copper);
+}
+
+@media (max-width: 1180px) {
+  .vulnerability-score-grid,
+  .vulnerability-case-guide,
+  .vulnerability-sensitivity-case-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .vulnerability-trend-card .order-card-head {
+    align-items: start;
+  }
+}
+
+@media (max-width: 720px) {
+  .vulnerability-score-grid,
+  .vulnerability-case-guide,
+  .vulnerability-case-row,
+  .vulnerability-trend-grid,
+  .vulnerability-sensitivity-controls,
+  .vulnerability-sensitivity-summary,
+  .vulnerability-sensitivity-case-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .vulnerability-trend-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .vulnerability-country-tools {
+    width: 100%;
+    justify-self: stretch;
+  }
+
+  .vulnerability-bar-row {
+    grid-template-columns: 1fr;
+  }
+
+  .vulnerability-bar-row strong {
+    text-align: left;
+  }
+}
+
+/* Collapsible control panel and refined control composition. */
+.top-nav-toggle {
+  flex: 0 0 auto;
+  border: 1px solid var(--line-soft);
+  cursor: pointer;
+}
+
+.top-nav-details:not(.is-controls-collapsed) .top-nav-toggle-icon::before {
+  transform: translateY(3px) rotate(225deg);
+}
+
+.top-nav-details.is-controls-collapsed .top-nav-toggle-icon::before {
+  transform: rotate(45deg);
+}
+
+#top-nav-panel[hidden] {
+  display: none;
+}
+
+.normal-controls-grid {
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  align-items: stretch;
+}
+
+.normal-controls-grid .control-block,
+.normal-controls-grid .dock-group {
+  min-height: 96px;
+}
+
+.normal-controls-grid .control-block-theme {
+  grid-column: span 2;
+}
+
+.normal-controls-grid .control-block-reference {
+  grid-column: span 4;
+}
+
+.normal-controls-grid .dock-group-s7 {
+  grid-column: span 6;
+}
+
+.normal-controls-grid .control-block-access {
+  grid-column: span 8;
+}
+
+.normal-controls-grid .control-action-btn {
+  grid-column: span 2;
+  align-self: center;
+  height: 44px;
+  min-height: 44px;
+  width: 100%;
+}
+
+.normal-controls .control-note-wide {
+  grid-column: 1 / -1;
+  align-self: center;
+  min-height: 0;
+  padding: 0 2px;
+}
+
+@media (max-width: 1380px) {
+  .normal-controls-grid {
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+  }
+
+  .normal-controls-grid .control-block-access {
+    grid-column: span 4;
+  }
+
+  .normal-controls-grid .control-block-theme,
+  .normal-controls-grid .control-block-reference {
+    grid-column: span 2;
+  }
+
+  .normal-controls-grid .dock-group-s7 {
+    grid-column: span 4;
+  }
+
+  .normal-controls-grid .control-action-btn {
+    grid-column: span 2;
+  }
+}
+
+@media (max-width: 980px) {
+  .normal-controls-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .normal-controls-grid .control-block-access,
+  .normal-controls-grid .dock-group-s7,
+  .normal-controls .control-note-wide {
+    grid-column: 1 / -1;
+  }
+
+  .normal-controls-grid .control-block-theme,
+  .normal-controls-grid .control-block-reference,
+  .normal-controls-grid .control-action-btn {
+    grid-column: span 2;
+  }
+}
+
+@media (max-width: 720px) {
+  .normal-controls-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .normal-controls-grid .control-block-theme,
+  .normal-controls-grid .control-block-reference,
+  .normal-controls-grid .control-action-btn {
+    grid-column: 1;
+  }
+}
+
+/* Analysis workspaces only need visual theme and access controls. */
+.top-nav-details.is-analysis-controls .normal-controls-grid {
+  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
+  gap: 10px;
+}
+
+.top-nav-details.is-analysis-controls .dock-group-s7,
+.top-nav-details.is-analysis-controls .control-block-reference,
+.top-nav-details.is-analysis-controls .control-action-btn,
+.top-nav-details.is-analysis-controls .control-note-wide {
+  display: none;
+}
+
+.top-nav-details.is-analysis-controls .normal-controls-grid .control-block-theme,
+.top-nav-details.is-analysis-controls .normal-controls-grid .control-block-access {
+  grid-column: auto;
+  min-height: 88px;
+}
+
+.top-nav-details.is-analysis-controls .normal-controls-grid .control-block-access {
+  align-content: center;
+}
+
+body[data-workspace-view="vulnerability"] .top-nav-selection-group {
+  display: none;
+}
+
+/* Compact multi-country trend toolbar. */
+.vulnerability-trend-toolbar {
+  grid-template-columns: 1fr;
+  gap: 6px;
+  align-items: start;
+}
+
+.vulnerability-country-vi-shell {
+  display: grid;
+  gap: 14px;
+}
+
+.vulnerability-country-vi-controls {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.15fr) minmax(120px, 0.52fr) minmax(140px, 0.64fr) minmax(130px, 0.58fr);
+  gap: 10px;
+  align-items: end;
+  padding: 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--panel-softest) 90%, #ffffff);
+}
+
+.vulnerability-country-result-comparison {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--panel-softest) 92%, #ffffff), var(--panel-softest));
+}
+
+.vulnerability-country-result-head {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.vulnerability-country-result-head > div {
+  display: grid;
+  gap: 3px;
+}
+
+.vulnerability-country-result-head strong {
+  color: var(--text);
+  font-family: var(--font-display);
+}
+
+.vulnerability-country-result-head span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.vulnerability-country-result-table {
+  min-width: 720px;
+}
+
+.vulnerability-country-result-table tr.is-active {
+  background: color-mix(in srgb, var(--accent-green) 9%, transparent);
+}
+
+.vulnerability-country-result-table .delta-badge {
+  min-width: 72px;
+  justify-content: center;
+}
+
+.vulnerability-country-vi-panel {
+  min-width: 0;
+}
+
+.vulnerability-trend-panel {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--panel-softest) 92%, #ffffff), var(--panel-softest));
+}
+
+.vulnerability-trend-section-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.vulnerability-country-tools {
+  grid-template-columns: minmax(260px, 1fr);
+  justify-self: stretch;
+  width: 100%;
+  gap: 8px 10px;
+}
+
+.vulnerability-trend-country-tools {
+  grid-template-columns: minmax(260px, 1fr);
+  justify-self: end;
+  width: min(560px, 100%);
+}
+
+.vulnerability-country-picker-compact {
+  grid-column: auto;
+}
+
+.vulnerability-compare-controls {
+  grid-column: auto;
+}
+
+.vulnerability-country-chips {
+  grid-column: 1 / -1;
+  align-items: center;
+}
+
+.plot-download-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  font-size: 0.76rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.vulnerability-country-line-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  min-height: 32px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.2;
+}
+
+.vulnerability-country-line-label {
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.vulnerability-country-line-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  --series-color: #7d7064;
+}
+
+.vulnerability-country-line-swatch {
+  width: 30px;
+  height: 3px;
+  flex: 0 0 30px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.vulnerability-country-line-dash {
+  background: repeating-linear-gradient(
+    90deg,
+    currentColor 0 7px,
+    transparent 7px 12px
+  );
+}
+
+.vulnerability-country-line-dot {
+  background: repeating-linear-gradient(
+    90deg,
+    currentColor 0 2px,
+    transparent 2px 7px
+  );
+}
+
+.vulnerability-country-line-dashdot {
+  background: repeating-linear-gradient(
+    90deg,
+    currentColor 0 8px,
+    transparent 8px 11px,
+    currentColor 11px 13px,
+    transparent 13px 18px
+  );
+}
+
+.vulnerability-stage-profile {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--panel-softest) 92%, #ffffff), var(--panel-softest));
+}
+
+.vulnerability-stage-profile-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.vulnerability-stage-profile-head > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.vulnerability-stage-profile-head strong {
+  color: var(--text);
+  font-family: var(--font-display);
+}
+
+.vulnerability-stage-profile-head span,
+.vulnerability-stage-profile-note {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.vulnerability-stage-profile-note {
+  max-width: none;
+  text-align: left;
+}
+
+.vulnerability-stage-profile-actions {
+  display: grid;
+  grid-template-columns: minmax(300px, 1fr) auto;
+  gap: 8px;
+  justify-content: flex-end;
+  align-items: end;
+  width: min(470px, 100%);
+  min-width: 0;
+}
+
+.vulnerability-stage-profile-actions .vulnerability-country-picker span {
+  white-space: nowrap;
+}
+
+.vulnerability-stage-profile-actions .plot-download-btn {
+  align-self: end;
+  height: 44px;
+  min-height: 44px;
+  padding-block: 0;
+  padding-inline: 12px;
+}
+
+.vulnerability-stage-year-field {
+  display: grid;
+  gap: 5px;
+  min-width: 132px;
+}
+
+.vulnerability-stage-year-field span,
+.vulnerability-stage-country-legend > span:first-child {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.vulnerability-stage-country-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: center;
+  min-width: 0;
+}
+
+.vulnerability-stage-country-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 5px 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--profile-color) 8%, var(--panel-softest));
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.2;
+}
+
+.vulnerability-stage-country-chip i {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 10px;
+  border-radius: 999px;
+  background: var(--profile-color);
+  box-shadow: inset 0 0 0 1px rgba(42, 34, 28, 0.24);
+}
+
+.vulnerability-stage-country-chip strong {
+  color: var(--text);
+  font-size: 0.72rem;
+}
+
+.vulnerability-stage-country-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vulnerability-stage-profile-plot {
+  width: 100%;
+  min-height: 336px;
+}
+
+.vulnerability-sensitivity-stage-profile {
+  background: color-mix(in srgb, var(--panel-softest) 88%, #ffffff);
+}
+
+/* Non-Guest VI Sensitivity lab. */
+.vulnerability-sensitivity-lock {
+  display: grid;
+  gap: 6px;
+  padding: 16px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: linear-gradient(135deg, rgba(123, 184, 139, 0.1), var(--panel-softest));
+  color: var(--muted);
+}
+
+.vulnerability-sensitivity-lock strong {
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+}
+
+.vulnerability-sensitivity-loading {
+  display: grid;
+  gap: 6px;
+  padding: 16px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: linear-gradient(135deg, rgba(214, 135, 73, 0.08), var(--panel-softest));
+  color: var(--muted);
+}
+
+.vulnerability-sensitivity-loading strong {
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+}
+
+.vulnerability-sensitivity-sandbox {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.9fr) minmax(360px, 1.25fr);
+  gap: 12px;
+}
+
+.vulnerability-sensitivity-sandbox-exact {
+  grid-template-columns: minmax(340px, 0.95fr) minmax(520px, 1.35fr);
+  align-items: stretch;
+}
+
+.vulnerability-sensitivity-section,
+.vulnerability-sensitivity-output {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: var(--panel-softest);
+}
+
+.vulnerability-production-editor {
+  align-self: stretch;
+  align-content: start;
+}
+
+.vulnerability-sensitivity-section-head,
+.vulnerability-sensitivity-output-head {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.vulnerability-sensitivity-section-head span,
+.vulnerability-sensitivity-output-head span,
+.vulnerability-production-field span,
+.vulnerability-production-delta span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.vulnerability-sensitivity-section-head strong,
+.vulnerability-sensitivity-output-head strong,
+.vulnerability-production-delta strong {
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  line-height: 1.15;
+}
+
+.vulnerability-sensitivity-section-head small,
+.vulnerability-sensitivity-output-head small {
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.vulnerability-sensitivity-controls,
+.vulnerability-production-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  align-items: end;
+}
+
+.vulnerability-sensitivity-controls-exact {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.vulnerability-sensitivity-controls-exact .vulnerability-sensitivity-field:first-child {
+  grid-column: 1 / -1;
+}
+
+.vulnerability-sensitivity-controls-exact .vulnerability-production-delta {
+  min-height: 58px;
+}
+
+.vulnerability-sensitivity-controls-exact .vulnerability-production-delta small {
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.vulnerability-sensitivity-controls-exact #vulnerability-sensitivity-add-edit-btn {
+  align-self: stretch;
+  min-height: 58px;
+}
+
+.vulnerability-production-field {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.vulnerability-production-field input {
+  min-height: 38px;
+}
+
+.vulnerability-production-delta {
+  align-self: stretch;
+  align-content: center;
+  padding: 10px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: rgba(123, 184, 139, 0.08);
+}
+
+.vulnerability-sensitivity-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.vulnerability-sensitivity-actions .primary-btn,
+.vulnerability-sensitivity-actions .ghost-btn {
+  min-height: 38px;
+  padding-inline: 16px;
+}
+
+.vulnerability-sensitivity-output {
+  margin-top: 2px;
+}
+
+.vulnerability-edit-table {
+  display: grid;
+  overflow-x: auto;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+}
+
+.vulnerability-edit-row {
+  display: grid;
+  grid-template-columns: minmax(118px, 1fr) minmax(86px, 0.7fr) minmax(122px, 0.8fr) minmax(138px, 0.9fr) minmax(76px, 0.55fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-width: 720px;
+  padding: 9px 10px;
+  border-top: 1px solid var(--line-soft);
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.vulnerability-edit-row:first-child {
+  border-top: 0;
+}
+
+.vulnerability-edit-row-head {
+  background: rgba(123, 184, 139, 0.08);
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.vulnerability-edit-row strong {
+  color: var(--text);
+}
+
+.vulnerability-edit-input-label {
+  min-width: 0;
+}
+
+.vulnerability-edit-input-label input {
+  width: 100%;
+  min-height: 34px;
+}
+
+.vulnerability-edit-delta {
+  color: var(--text);
+  font-weight: 800;
+}
+
+.vulnerability-edit-remove {
+  min-height: 34px;
+  padding-inline: 10px;
+}
+
+.vulnerability-sensitivity-output-toolbar {
+  grid-template-columns: minmax(0, 1fr) minmax(200px, 300px);
+  gap: 12px;
+  align-items: center;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.vulnerability-sensitivity-output-title {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.vulnerability-applied-edits {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.vulnerability-applied-edits span {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  padding: 6px 9px;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  background: rgba(214, 135, 73, 0.08);
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.vulnerability-applied-edits strong {
+  color: var(--text);
+}
+
+.vulnerability-sensitivity-pair-table {
+  min-width: 720px;
+  table-layout: fixed;
+}
+
+.vulnerability-sensitivity-pair-table th,
+.vulnerability-sensitivity-pair-table td {
+  text-align: right;
+  vertical-align: middle;
+}
+
+.vulnerability-sensitivity-pair-table th:first-child,
+.vulnerability-sensitivity-pair-table td:nth-child(2) {
+  text-align: left;
+}
+
+.vulnerability-sensitivity-pair-table td .delta-badge {
+  min-width: 68px;
+  justify-content: center;
+}
+
+.vulnerability-sensitivity-pair-table tr.is-selected {
+  background: color-mix(in srgb, var(--accent-green) 9%, transparent);
+}
+
+@media (max-width: 1180px) {
+  .vulnerability-trend-toolbar,
+  .vulnerability-trend-section-head,
+  .vulnerability-country-vi-controls,
+  .vulnerability-sensitivity-sandbox {
+    grid-template-columns: 1fr;
+  }
+
+  .vulnerability-country-tools {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .top-nav-details.is-analysis-controls .normal-controls-grid,
+  .vulnerability-country-tools,
+  .vulnerability-country-vi-controls,
+  .vulnerability-trend-section-head,
+  .vulnerability-sensitivity-controls,
+  .vulnerability-sensitivity-controls-exact,
+  .vulnerability-production-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .vulnerability-sensitivity-controls-exact .vulnerability-sensitivity-field:first-child,
+  .vulnerability-sensitivity-output-toolbar,
+  .vulnerability-stage-profile-head {
+    grid-column: 1;
+    grid-template-columns: 1fr;
+  }
+
+  .vulnerability-stage-profile-head {
+    display: grid;
+  }
+
+  .vulnerability-stage-profile-note {
+    max-width: none;
+    text-align: left;
+  }
+
+  .vulnerability-stage-profile-actions {
+    grid-template-columns: 1fr;
+    justify-content: stretch;
+    min-width: 0;
+  }
+
+  .vulnerability-trend-legend-deck {
+    justify-content: start;
+  }
+
+  .top-nav-details.is-analysis-controls .normal-controls-grid .control-block-theme,
+  .top-nav-details.is-analysis-controls .normal-controls-grid .control-block-access,
+  .vulnerability-country-picker-compact,
+  .vulnerability-compare-controls {
+    grid-column: 1;
+  }
+
+  .vulnerability-sensitivity-actions {
+    justify-content: stretch;
+  }
+
+  .vulnerability-sensitivity-actions .primary-btn,
+  .vulnerability-sensitivity-actions .ghost-btn {
+    flex: 1 1 auto;
   }
 }

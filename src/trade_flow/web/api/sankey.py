@@ -14,7 +14,7 @@ from plotly.offline import get_plotlyjs
 from pydantic import BaseModel, Field
 
 from trade_flow.legacy_site.config import get_battery_site_config
-from trade_flow.legacy_site.services.precomputed_repository import SCENARIOS, TABLE_VIEWS, get_repository
+from trade_flow.legacy_site.services.precomputed_repository import SCENARIOS, TABLE_VIEWS, get_repository, normalize_scenario
 from trade_flow.legacy_site.services.precomputed_site import DEFAULT_COBALT_MODE, DEFAULT_METAL, DEFAULT_THEME
 from trade_flow.web.presenters.sankey_presenter import (
     ACCESS_MODES,
@@ -40,6 +40,7 @@ class FigureRequestModel(BaseModel):
     stageOrders: dict[str, list[str]] = Field(default_factory=dict)
     specialPositions: dict[str, str] = Field(default_factory=dict)
     aggregateCounts: dict[str, int] = Field(default_factory=dict)
+    aggregatePreserve: dict[str, list[str]] = Field(default_factory=dict)
     cobaltMode: str = DEFAULT_COBALT_MODE
     accessMode: str = DEFAULT_ACCESS_MODE
     accessPassword: str = ""
@@ -70,12 +71,7 @@ def _public_request_json(request: FigureRequestModel, access_mode: str) -> str:
 def _runtime_cache_version(repo: Any) -> str:
     digest = hashlib.sha256()
     digest.update(json.dumps({"metals": repo.metals, "years": repo.years}, sort_keys=True).encode("utf-8"))
-    for attr in (
-        "original_data_root",
-        "first_optimization_data_root",
-        "first_optimization_diagnostics_root",
-        "version_output_root",
-    ):
+    for attr in ("original_data_root", "version_output_root"):
         root = getattr(repo, attr, None)
         try:
             exists = bool(root and root.exists())
@@ -83,6 +79,15 @@ def _runtime_cache_version(repo: Any) -> str:
             digest.update(f"{attr}:{int(exists)}:{mtime}".encode("utf-8"))
         except OSError:
             digest.update(f"{attr}:unavailable".encode("utf-8"))
+    for attr in ("scenario_output_dirs", "scenario_comparison_dirs", "scenario_diagnostics_dirs"):
+        mapping = getattr(repo, attr, {}) or {}
+        for key, root in sorted(mapping.items()):
+            try:
+                exists = bool(root and root.exists())
+                mtime = root.stat().st_mtime_ns if exists else 0
+                digest.update(f"{attr}:{key}:{int(exists)}:{mtime}".encode("utf-8"))
+            except OSError:
+                digest.update(f"{attr}:{key}:unavailable".encode("utf-8"))
     return digest.hexdigest()[:16]
 
 
@@ -119,6 +124,7 @@ def _build_cached_payload(cache_version: str, request_json: str) -> dict:
         stage_orders=data.get("stageOrders") or {},
         special_positions=data.get("specialPositions") or {},
         aggregate_counts=data.get("aggregateCounts") or {},
+        aggregate_preserve=data.get("aggregatePreserve") or {},
         cobalt_mode=data.get("cobaltMode", DEFAULT_COBALT_MODE),
         access_mode=data.get("accessMode", DEFAULT_ACCESS_MODE),
         s7_view_mode=data.get("s7ViewMode", "country"),
@@ -132,6 +138,7 @@ def _figure_response(request: FigureRequestModel, access_mode: str) -> JSONRespo
         repo = get_repository()
     except (FileNotFoundError, OSError) as exc:
         raise _runtime_unavailable(exc) from exc
+    request.resultMode = normalize_scenario(request.resultMode)
     _validate_request(repo, request)
     request_json = _public_request_json(request, access_mode)
     cache_version = _runtime_cache_version(repo)

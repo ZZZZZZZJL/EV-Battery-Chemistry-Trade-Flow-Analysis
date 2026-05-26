@@ -6,6 +6,7 @@ from typing import Any
 
 from trade_flow.legacy_site.config import BatterySiteConfig, get_battery_site_config
 from trade_flow.legacy_site.services.datasets import load_dataset_config
+from trade_flow.legacy_site.services.precomputed_repository import OPTIMIZATION_DATA_DIRS, SCENARIO_LABELS
 
 
 @dataclass(frozen=True)
@@ -63,10 +64,19 @@ def gather_runtime_status(config: BatterySiteConfig | None = None) -> RuntimeSta
         _path_check("static", "Static Assets", config.static_dir),
         _path_check("data_dir", "App Data Directory", config.data_dir),
         _path_check("original_cases", "Original Case Root", original_root),
-        _path_check("first_optimization_cases", "First Optimization Case Root", first_optimization_root),
-        _path_check("first_optimization_diagnostics", "First Optimization Diagnostics Root", diagnostics_root, required=False),
-        _path_check("output_versions", "Output Versions Root", config.output_versions_root),
     ]
+    for scenario, directory_name in OPTIMIZATION_DATA_DIRS.items():
+        scenario_root = config.data_dir / directory_name
+        resolved_root = scenario_root if (scenario_root / "optimized").exists() else first_optimization_root
+        scenario_diagnostics_root = scenario_root / "diagnostics"
+        resolved_diagnostics_root = scenario_diagnostics_root if scenario_diagnostics_root.exists() else diagnostics_root
+        scenario_label = SCENARIO_LABELS.get(scenario, scenario)
+        checks.extend(
+            [
+                _path_check(f"{scenario}_cases", f"{scenario_label} Case Root", resolved_root),
+                _path_check(f"{scenario}_diagnostics", f"{scenario_label} Diagnostics Root", resolved_diagnostics_root, required=False),
+            ]
+        )
     errors: list[str] = []
     warnings: list[str] = []
 
@@ -80,8 +90,6 @@ def gather_runtime_status(config: BatterySiteConfig | None = None) -> RuntimeSta
         checks.extend(
             [
                 _path_check("reference_file", "Reference File", Path(dataset_config["referenceFile"])),
-                _path_check("production_root", "Production Root", Path(dataset_config["productionRoot"])),
-                _path_check("trade_root", "Trade Root", Path(dataset_config["tradeRoot"])),
             ]
         )
 
@@ -91,6 +99,8 @@ def gather_runtime_status(config: BatterySiteConfig | None = None) -> RuntimeSta
     for check in checks:
         if check.required and not check.exists:
             errors.append(f"Missing required runtime resource: {check.label}")
+        elif not check.required and not check.exists:
+            warnings.append(f"Optional runtime resource unavailable: {check.label}")
 
     ready = not errors
     return RuntimeStatus(

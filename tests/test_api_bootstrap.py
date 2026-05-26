@@ -15,7 +15,9 @@ class ApiBootstrapTests(unittest.TestCase):
         metadata = payload["metadata"]
         self.assertEqual(metadata["defaultTheme"], "light")
         self.assertIn("baseline", metadata["resultModes"])
-        self.assertIn("first_optimization", metadata["resultModes"])
+        self.assertIn("pareto_optimal", metadata["resultModes"])
+        self.assertIn("sn_minimum", metadata["resultModes"])
+        self.assertIn("deviation_minimum", metadata["resultModes"])
         self.assertEqual(metadata["defaultMetal"], "Ni")
         self.assertEqual(metadata["defaultYear"], 2024)
         self.assertIn("runtime", metadata)

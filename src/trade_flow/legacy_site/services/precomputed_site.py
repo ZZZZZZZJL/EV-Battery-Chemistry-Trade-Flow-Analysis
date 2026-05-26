@@ -14,9 +14,12 @@ from trade_flow.legacy_site.services.lithium_data import LithiumYearInputs, Trad
 from trade_flow.legacy_site.services.nickel_data import NickelYearInputs, TradeFlow as NickelTradeFlow
 from trade_flow.legacy_site.services.precomputed_repository import (
     OutputRepository,
+    SCENARIOS,
     SCENARIO_LABELS,
     TABLE_VIEW_LABELS,
     get_repository,
+    is_optimization_scenario,
+    normalize_scenario,
 )
 from trade_flow.legacy_site.services.shared_sankey import (
     BODY_TEXT_BY_THEME,
@@ -47,11 +50,12 @@ from trade_flow.legacy_site.services.shared_sankey import (
     _apply_stage_aggregation as _shared_apply_stage_aggregation,
     _build_figure as _shared_build_figure,
     _validate_aggregate_counts as _shared_validate_aggregate_counts,
+    _validate_aggregate_preserve as _shared_validate_aggregate_preserve,
 )
 
 
 DEFAULT_METAL = "Ni"
-RESULT_MODES = ("baseline", "first_optimization")
+RESULT_MODES = SCENARIOS
 SORT_MODES = ("size", "manual", "continent")
 SPECIAL_NODE_POSITIONS = ("first", "last")
 DEFAULT_SPECIAL_POSITION = "first"
@@ -279,8 +283,9 @@ def _uses_default_layout(
     stage_orders: dict[str, list[str]] | None,
     special_positions: dict[str, str] | None,
     aggregate_counts: dict[str, int] | None,
+    aggregate_preserve: dict[str, list[str]] | None = None,
 ) -> bool:
-    return not any((sort_modes or {}, stage_orders or {}, special_positions or {}, aggregate_counts or {}))
+    return not any((sort_modes or {}, stage_orders or {}, special_positions or {}, aggregate_counts or {}, aggregate_preserve or {}))
 
 
 def _reference_qty_matches_default(metal: str, reference_qty: float | None) -> bool:
@@ -633,6 +638,7 @@ def _ordered_stage_rows(
             "maxAggregateCount": max(len(regular_rows) - 1, 0),
             "items": [
                 {
+                    "key": str(row["key"]),
                     "label": str(row["label"]),
                     "value": float(row["value"]),
                     "rank": size_rank_by_key.get(str(row["key"])),
@@ -708,16 +714,20 @@ def _build_stage_summary_for_view(
 def _dataset_status(repo: OutputRepository, metal: str, year: int, scenario: str, table_view: str, cobalt_mode: str = DEFAULT_COBALT_MODE) -> dict[str, dict[str, Any]]:
     resolved_table = _resolved_table_view(scenario, table_view)
     baseline_case = repo.case_dir(metal, year, "baseline")
-    first_optimization_case = repo.case_dir(metal, year, "first_optimization")
+    current_case = repo.case_dir(metal, year, scenario)
     comparison_dir = repo.scenario_comparison_dirs.get(scenario, repo.comparison_dir)
     suffix = f" ({COBALT_MODE_LABELS.get(cobalt_mode, cobalt_mode)})" if metal == "Co" else ""
     payload = {
-        f"Current Result Folder{suffix}": {"exists": True, "label": repo.case_dir(metal, year, scenario).name},
+        f"Current Result Folder{suffix}": {"exists": current_case.exists(), "label": current_case.name},
         f"Original Export{suffix}": {"exists": baseline_case.exists(), "label": baseline_case.name},
-        f"First Optimization Export{suffix}": {"exists": first_optimization_case.exists(), "label": first_optimization_case.name},
         "Comparison Tables": {"exists": comparison_dir.exists(), "label": comparison_dir.name},
         "Table Source": {"exists": True, "label": TABLE_VIEW_LABELS.get(resolved_table, resolved_table)},
     }
+    if is_optimization_scenario(scenario):
+        payload[f"{SCENARIO_LABELS.get(scenario, scenario)} Export{suffix}"] = {
+            "exists": current_case.exists(),
+            "label": current_case.name,
+        }
     return payload
 
 
@@ -796,11 +806,12 @@ def build_figure(
     stage_orders: dict[str, list[str]],
     special_positions: dict[str, str],
     aggregate_counts: dict[str, int] | None = None,
+    aggregate_preserve: dict[str, list[str]] | None = None,
     cobalt_mode: str = DEFAULT_COBALT_MODE,
     access_mode: str = "analyst",
     s7_view_mode: str = VIEW_MODE,
     s7_aggregate_nmc_nca: bool = False,
-) -> tuple[dict[str, Any], dict[str, Any], dict[str, str], dict[str, str], dict[str, int]]:
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, str], dict[str, str], dict[str, int], dict[str, list[str]]]:
     resolved_s7_view_mode = _resolve_s7_view_mode(s7_view_mode)
     resolved_s7_aggregate = bool(s7_aggregate_nmc_nca and resolved_s7_view_mode != VIEW_MODE)
     _, _, style_template, _, _, _ = _style_template(repo, metal, year, cobalt_mode)
@@ -834,6 +845,7 @@ def build_figure(
         resolved_special_positions,
         aggregate_counts,
     )
+    resolved_aggregate_preserve = _shared_validate_aggregate_preserve(node_specs, aggregate_preserve)
     figure_nodes, figure_links = _shared_apply_stage_aggregation(
         node_specs,
         link_specs,
@@ -841,6 +853,7 @@ def build_figure(
         stage_orders,
         resolved_special_positions,
         resolved_aggregate_counts,
+        resolved_aggregate_preserve,
         resolved_s7_view_mode,
         EPSILON,
     )
@@ -850,6 +863,7 @@ def build_figure(
             stage_controls[stage]["aggregateCount"] = (
                 resolved_aggregate_counts.get(stage, 0) if resolved_sort_modes.get(stage) != "continent" else 0
             )
+            stage_controls[stage]["aggregatePreserve"] = list(resolved_aggregate_preserve.get(stage, []))
     figure_payload = _shared_build_figure(
         figure_nodes,
         figure_links,
@@ -865,7 +879,7 @@ def build_figure(
     )
     if access_mode == "guest":
         figure_payload = _apply_guest_figure_redaction(figure_payload)
-    return figure_payload, stage_controls, resolved_sort_modes, resolved_special_positions, resolved_aggregate_counts
+    return figure_payload, stage_controls, resolved_sort_modes, resolved_special_positions, resolved_aggregate_counts, resolved_aggregate_preserve
 
 
 def _apply_access_mode(payload: dict[str, Any], access_mode: str) -> dict[str, Any]:
@@ -886,7 +900,7 @@ def _apply_access_mode(payload: dict[str, Any], access_mode: str) -> dict[str, A
         "unknownBreakdown": [],
         "tradeFlows": [],
         "activeTableView": "guest",
-        "transitionNote": "Diagnostics are hidden in guest mode.",
+        "transitionNote": "Analysis is hidden in guest mode.",
     }
     for stage in payload.get("stageControls", {}).values():
         for item in stage.get("items", []):
@@ -906,15 +920,18 @@ def _build_app_payload_uncached(
     stage_orders: dict[str, list[str]] | None = None,
     special_positions: dict[str, str] | None = None,
     aggregate_counts: dict[str, int] | None = None,
+    aggregate_preserve: dict[str, list[str]] | None = None,
     cobalt_mode: str = DEFAULT_COBALT_MODE,
     access_mode: str = "analyst",
     s7_view_mode: str = VIEW_MODE,
     s7_aggregate_nmc_nca: bool = False,
 ) -> dict[str, Any]:
+    scenario = normalize_scenario(scenario)
     sort_modes = sort_modes or {}
     stage_orders = stage_orders or {}
     special_positions = special_positions or {}
     aggregate_counts = aggregate_counts or {}
+    aggregate_preserve = aggregate_preserve or {}
     theme = theme if theme in THEME_MODES else DEFAULT_THEME
     if reference_qty is None:
         reference_qty = default_reference_quantity_for_metal(metal)
@@ -923,7 +940,14 @@ def _build_app_payload_uncached(
     resolved_s7_view_mode = _resolve_s7_view_mode(s7_view_mode)
     resolved_s7_aggregate = bool(s7_aggregate_nmc_nca and resolved_s7_view_mode != VIEW_MODE)
     comparison = repo.get_comparison_row(metal, year, scenario, cobalt_mode) if scenario != "baseline" else {}
-    figure, stage_controls, resolved_sort_modes, resolved_special_positions, resolved_aggregate_counts = build_figure(
+    (
+        figure,
+        stage_controls,
+        resolved_sort_modes,
+        resolved_special_positions,
+        resolved_aggregate_counts,
+        resolved_aggregate_preserve,
+    ) = build_figure(
         repo,
         metal,
         year,
@@ -934,6 +958,7 @@ def _build_app_payload_uncached(
         stage_orders,
         special_positions,
         aggregate_counts,
+        aggregate_preserve,
         cobalt_mode,
         access_mode,
         resolved_s7_view_mode,
@@ -952,14 +977,11 @@ def _build_app_payload_uncached(
     dataset_status = _dataset_status(repo, metal, year, scenario, table_view, cobalt_mode)
 
     compare_mode = "compare" if scenario != "baseline" else "baseline"
+    result_label = SCENARIO_LABELS.get(scenario, scenario)
     transition_note = (
-        "Original-only diagnostics are shown in this mode. Stage-level optimization diagnostics appear when you switch to First Optimization."
+        "Original-only analysis is shown in this mode. Choose Optimization for optimizer-stage summaries."
         if scenario == "baseline"
-        else (
-            "First Optimization now renders the latest conversion_factor_optimization result after synchronizing it into the published runtime snapshot. The non-guest tables below Sorting Studio summarize stage outcomes, bounds, special handling, source scaling, and c_pp / c_pn / c_np coefficients."
-            if scenario == "first_optimization"
-            else "Diagnostics summarize the selected optimization output."
-        )
+        else f"{result_label} renders the selected normalized optimizer export from the active runtime snapshot. The non-guest Analysis tables summarize stage outcomes, source scaling, special handling, and available coefficient outputs."
     )
 
     payload = {
@@ -976,6 +998,7 @@ def _build_app_payload_uncached(
         "tableViewLabel": TABLE_VIEW_LABELS.get(resolved_table_view, resolved_table_view),
         "referenceQuantity": reference_qty,
         "aggregateCounts": resolved_aggregate_counts,
+        "aggregatePreserve": resolved_aggregate_preserve,
         "specialPositions": resolved_special_positions,
         "sortModes": resolved_sort_modes,
         "figure": figure,
@@ -1054,19 +1077,18 @@ def warm_default_payload_cache() -> dict[str, Any]:
         for year in repo.years:
             for scenario in RESULT_MODES:
                 for theme in THEME_MODES:
-                    for access_mode in ("guest", "analyst"):
-                        for cobalt_mode in cobalt_modes:
-                            _build_default_payload_cached(
-                                metal,
-                                year,
-                                scenario,
-                                "compare",
-                                reference_qty,
-                                theme,
-                                cobalt_mode,
-                                access_mode,
-                            )
-                            warmed += 1
+                    for cobalt_mode in cobalt_modes:
+                        _build_default_payload_cached(
+                            metal,
+                            year,
+                            scenario,
+                            "compare",
+                            reference_qty,
+                            theme,
+                            cobalt_mode,
+                            "guest",
+                        )
+                        warmed += 1
     return {
         "warmedPayloads": warmed,
         "cache": default_payload_cache_info(),
@@ -1085,6 +1107,7 @@ def build_app_payload(
     stage_orders: dict[str, list[str]] | None = None,
     special_positions: dict[str, str] | None = None,
     aggregate_counts: dict[str, int] | None = None,
+    aggregate_preserve: dict[str, list[str]] | None = None,
     cobalt_mode: str = DEFAULT_COBALT_MODE,
     access_mode: str = "analyst",
     s7_view_mode: str = VIEW_MODE,
@@ -1095,7 +1118,7 @@ def build_app_payload(
     resolved_s7_aggregate = bool(s7_aggregate_nmc_nca and resolved_s7_view_mode != VIEW_MODE)
     if (
         repo is runtime_repo
-        and _uses_default_layout(sort_modes, stage_orders, special_positions, aggregate_counts)
+        and _uses_default_layout(sort_modes, stage_orders, special_positions, aggregate_counts, aggregate_preserve)
         and _reference_qty_matches_default(metal, reference_qty)
         and resolved_s7_view_mode == VIEW_MODE
         and not resolved_s7_aggregate
@@ -1124,6 +1147,7 @@ def build_app_payload(
         stage_orders=stage_orders,
         special_positions=special_positions,
         aggregate_counts=aggregate_counts,
+        aggregate_preserve=aggregate_preserve,
         cobalt_mode=cobalt_mode,
         access_mode=access_mode,
         s7_view_mode=resolved_s7_view_mode,

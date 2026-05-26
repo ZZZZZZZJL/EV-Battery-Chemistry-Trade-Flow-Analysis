@@ -14,10 +14,19 @@ from trade_flow.legacy_site.services.first_optimization_tables import FirstOptim
 from trade_flow.legacy_site.services.reference import load_reference_frame
 
 
-SCENARIOS = ("baseline", "first_optimization")
+OPTIMIZATION_SCENARIOS = ("pareto_optimal", "sn_minimum", "deviation_minimum")
+OPTIMIZATION_DATA_DIRS = {
+    "pareto_optimal": "pareto_optimal",
+    "sn_minimum": "sn_minimum",
+    "deviation_minimum": "deviation_minimum",
+}
+RESULT_MODE_ALIASES = {"first_optimization": "pareto_optimal"}
+SCENARIOS = ("baseline", *OPTIMIZATION_SCENARIOS)
 SCENARIO_LABELS = {
     "baseline": "Original",
-    "first_optimization": "First Optimization",
+    "pareto_optimal": "Multiobjective",
+    "sn_minimum": "SN Minimum",
+    "deviation_minimum": "Deviation Minimum",
 }
 TABLE_VIEWS = ("auto", "baseline", "optimized", "compare")
 TABLE_VIEW_LABELS = {
@@ -44,7 +53,7 @@ CASE_FILE_MAP = {
 }
 SCENARIO_CASE_KIND = {
     "baseline": "baseline",
-    "first_optimization": "optimized",
+    **{scenario: "optimized" for scenario in OPTIMIZATION_SCENARIOS},
 }
 METRIC_ORDER = [
     ("unknown_total", "Unknown Total"),
@@ -58,6 +67,22 @@ STAGE_GROUP_STAGES = {
     "S1-S2-S3": ("S1", "S2", "S3"),
     "S3-S4-S5": ("S3", "S4", "S5"),
     "S5-S6-S7": ("S5", "S6", "S7"),
+}
+STAGE_SLUG_GROUPS = {
+    "s1_s2_s3": "S1-S2-S3",
+    "s3_s4_s5": "S3-S4-S5",
+    "s5_s6_s7": "S5-S6-S7",
+}
+STAGE_GROUP_SLUGS = {value: key for key, value in STAGE_SLUG_GROUPS.items()}
+STAGE_SLUG_TRANSITIONS = {
+    "s1_s2_s3": "trade1",
+    "s3_s4_s5": "trade2",
+    "s5_s6_s7": "trade3",
+}
+COEFFICIENT_WORKBOOK_SPECS = {
+    "PP": ("factor_c_pp", "optimized_c_pp", "source_country_id", "target_country_id"),
+    "PN": ("factor_c_pn", "optimized_c_pn", "source_country_id", ""),
+    "NP": ("factor_c_np", "optimized_c_np", "", "target_country_id"),
 }
 LINK_STAGE_GROUPS = {
     "S1": "S1-S2-S3",
@@ -122,6 +147,14 @@ PRODUCER_TRANSITION_LABELS = {
     "trade3": "S5-S7: 3rd Post Trade",
 }
 COBALT_MODES = ("mid", "max", "min")
+
+
+def is_optimization_scenario(scenario: str) -> bool:
+    return scenario in OPTIMIZATION_SCENARIOS
+
+
+def normalize_scenario(scenario: str) -> str:
+    return RESULT_MODE_ALIASES.get(scenario, scenario)
 
 
 def _ordered_param_items(params: dict[str, Any]) -> list[tuple[str, Any]]:
@@ -274,6 +307,48 @@ def _intermediate_file_candidates(intermediate_dir: Path, base_filename: str, me
     return [intermediate_dir / base_filename]
 
 
+def _ancestor_named(path: Path, name: str) -> Path | None:
+    normalized = name.lower()
+    for candidate in (path, *path.parents):
+        if candidate.name.lower() == normalized:
+            return candidate
+    return None
+
+
+def _resolve_selected_workbook_path(workbook_path: Path, project_root: Path | None = None) -> Path:
+    if workbook_path.exists():
+        return workbook_path
+
+    root = (project_root or get_battery_site_config().root_dir).resolve()
+    parts = workbook_path.parts
+    lower_parts = [part.lower() for part in parts]
+    candidates: list[Path] = []
+
+    workspace_root = _ancestor_named(root, "website")
+    if workspace_root and "website" in lower_parts:
+        marker_index = lower_parts.index("website")
+        tail = parts[marker_index + 1 :]
+        if tail:
+            candidates.append(workspace_root.joinpath(*tail))
+
+    if "worktrees" in lower_parts:
+        marker_index = lower_parts.index("worktrees")
+        tail = parts[marker_index + 1 :]
+        if tail:
+            worktrees_root = root.parent if root.parent.name.lower() == "worktrees" else root.parent / "worktrees"
+            candidates.append(worktrees_root.joinpath(*tail))
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        if candidate.exists():
+            return candidate
+    return workbook_path
+
+
 def _first_existing_path(candidates: list[Path]) -> Path:
     for candidate in candidates:
         if candidate.exists():
@@ -335,21 +410,33 @@ class OutputRepository:
     first_optimization_data_root: Path
     first_optimization_diagnostics_root: Path
     version_output_root: Path
+    optimization_data_roots: dict[str, Path] | None = None
+    optimization_diagnostics_roots: dict[str, Path] | None = None
 
     def __post_init__(self) -> None:
         self._case_csv_cache: dict[tuple[str, int, str, str, str], pd.DataFrame] = {}
         self._case_json_cache: dict[tuple[str, int, str, str, str], Any] = {}
         self._transition_frame_cache: dict[tuple[str, str], pd.DataFrame] = {}
-        self._coefficient_frame_cache: dict[tuple[str, str], pd.DataFrame] = {}
+        self._coefficient_frame_cache: dict[tuple[str, str, str], pd.DataFrame] = {}
+        optimization_data_roots = self.optimization_data_roots or {}
+        optimization_diagnostics_roots = self.optimization_diagnostics_roots or {}
+        scenario_output_dirs = {
+            scenario: optimization_data_roots.get(scenario, self.first_optimization_data_root)
+            for scenario in OPTIMIZATION_SCENARIOS
+        }
         self.scenario_output_dirs = {
             "baseline": self.original_data_root,
-            "first_optimization": self.first_optimization_data_root,
+            **scenario_output_dirs,
         }
         self.scenario_comparison_dirs = {
             "baseline": self.original_data_root / "comparison",
-            "first_optimization": self.first_optimization_data_root / "comparison",
+            **{scenario: root / "comparison" for scenario, root in scenario_output_dirs.items()},
         }
-        self.comparison_dir = self.scenario_comparison_dirs["first_optimization"]
+        self.scenario_diagnostics_dirs = {
+            scenario: optimization_diagnostics_roots.get(scenario, scenario_output_dirs[scenario] / "diagnostics")
+            for scenario in OPTIMIZATION_SCENARIOS
+        }
+        self.comparison_dir = self.scenario_comparison_dirs["pareto_optimal"]
         self.summary_frames = {
             scenario: pd.read_csv(
                 self.scenario_comparison_dirs[scenario]
@@ -365,14 +452,17 @@ class OutputRepository:
             for scenario in SCENARIOS
         }
         self.comparison_frames = {
-            "first_optimization": pd.read_csv(self.scenario_comparison_dirs["first_optimization"] / "comparison_summary.csv"),
+            scenario: pd.read_csv(self.scenario_comparison_dirs[scenario] / "comparison_summary.csv")
+            for scenario in OPTIMIZATION_SCENARIOS
         }
-        transition_detail_path = self.scenario_comparison_dirs["first_optimization"] / "optimized_transition_detail.csv"
-        self.transition_frames = {
-            "first_optimization": pd.read_csv(transition_detail_path).fillna("") if transition_detail_path.exists() else pd.DataFrame(),
-        }
+        self.transition_frames = {}
+        for scenario in OPTIMIZATION_SCENARIOS:
+            transition_detail_path = self.scenario_comparison_dirs[scenario] / "optimized_transition_detail.csv"
+            self.transition_frames[scenario] = (
+                pd.read_csv(transition_detail_path).fillna("") if transition_detail_path.exists() else pd.DataFrame()
+            )
         self.feasibility_by_scenario = {}
-        for scenario in ("first_optimization",):
+        for scenario in OPTIMIZATION_SCENARIOS:
             feasibility_path = self.scenario_comparison_dirs[scenario] / "feasibility_summary.json"
             if feasibility_path.exists():
                 with feasibility_path.open("r", encoding="utf-8") as handle:
@@ -380,13 +470,19 @@ class OutputRepository:
             else:
                 self.feasibility_by_scenario[scenario] = {"best_params_by_metal": {}}
         self.cobalt_mode_results: dict[str, dict[str, Any]] = {}
-        for scenario in ("first_optimization",):
+        for scenario in OPTIMIZATION_SCENARIOS:
             results_path = self.scenario_comparison_dirs[scenario] / "cobalt_mode_results.json"
             if results_path.exists():
                 with results_path.open("r", encoding="utf-8") as handle:
                     self.cobalt_mode_results[scenario] = json.load(handle)
             else:
                 self.cobalt_mode_results[scenario] = {}
+        self.selected_parameter_frames: dict[str, pd.DataFrame] = {}
+        for scenario in OPTIMIZATION_SCENARIOS:
+            selected_path = scenario_output_dirs[scenario] / "selected_stage_hyperparameters.csv"
+            self.selected_parameter_frames[scenario] = (
+                pd.read_csv(selected_path).fillna("") if selected_path.exists() else pd.DataFrame()
+            )
         self.country_name_by_id: dict[int, str] = {}
         self.country_region_by_id: dict[int, str] = {}
         try:
@@ -418,7 +514,8 @@ class OutputRepository:
 
     def _resolve_output_dir(self, version_key: str) -> Path:
         candidate = self.version_output_root / version_key / "output"
-        return candidate if candidate.exists() else self.first_optimization_data_root
+        fallback = self.scenario_output_dirs.get("pareto_optimal", self.first_optimization_data_root)
+        return candidate if candidate.exists() else fallback
 
     def case_dir(self, metal: str, year: int, scenario: str) -> Path:
         case_kind = SCENARIO_CASE_KIND[scenario]
@@ -482,6 +579,96 @@ class OutputRepository:
             "total_special": float(values[kinds.ne("regular")].sum()),
         }
 
+    def _regular_node_count(self, nodes: pd.DataFrame, stages: tuple[str, ...]) -> int:
+        if nodes.empty or "stage" not in nodes:
+            return 0
+        working = nodes[nodes["stage"].astype(str).isin(stages)].copy()
+        if working.empty:
+            return 0
+        kinds = working.get("kind", pd.Series("", index=working.index)).astype(str)
+        regular = working[kinds.eq("regular")]
+        if regular.empty:
+            return 0
+        label_column = "label" if "label" in regular else "key"
+        labels = regular[label_column].astype(str).str.strip()
+        return int(labels[labels.ne("")].nunique())
+
+    def _selected_stage_records(
+        self,
+        metal: str,
+        year: int,
+        scenario: str,
+    ) -> dict[str, dict[str, Any]]:
+        frame = self.selected_parameter_frames.get(scenario, pd.DataFrame())
+        if frame.empty or "metal" not in frame:
+            return {}
+        rows = frame[frame["metal"].astype(str).eq(metal)].copy()
+        if "year" in rows:
+            rows = rows[rows["year"].astype(str).eq(str(year))]
+        if rows.empty:
+            return {}
+        records: dict[str, dict[str, Any]] = {}
+        for record in rows.to_dict(orient="records"):
+            stage_slug = str(record.get("stage_slug", "")).strip().lower()
+            stage_group = STAGE_SLUG_GROUPS.get(stage_slug)
+            if stage_group:
+                records[stage_group] = record
+        return records
+
+    def _stage_group_comparison_rows(
+        self,
+        metal: str,
+        year: int,
+        scenario: str,
+        cobalt_mode: str = "mid",
+    ) -> list[dict[str, Any]]:
+        baseline_nodes = self.load_case_csv(metal, year, "baseline", "nodes", cobalt_mode)
+        optimized_nodes = self.load_case_csv(metal, year, scenario, "nodes", cobalt_mode)
+        selected_records = self._selected_stage_records(metal, year, scenario)
+        rows: list[dict[str, Any]] = []
+
+        for stage_group, stages in STAGE_GROUP_STAGES.items():
+            baseline_totals = self._node_breakdown_totals(baseline_nodes, stages)
+            optimized_totals = self._node_breakdown_totals(optimized_nodes, stages)
+            original_sn = baseline_totals["total_special"]
+            optimized_sn = optimized_totals["total_special"]
+            reduction = original_sn - optimized_sn
+            reduction_pct = (reduction / original_sn) if abs(original_sn) > 1e-9 else 0.0
+            record = selected_records.get(stage_group, {})
+            raw_status = str(record.get("status", "")).strip().lower()
+            if raw_status in {"success", "replaced"}:
+                status = "success"
+            elif raw_status == "not_replaced":
+                status = "retained"
+            else:
+                status = raw_status or "recorded"
+
+            rows.append(
+                {
+                    "Stage Group": stage_group,
+                    "Status": status,
+                    "Original SN": original_sn,
+                    "Optimized SN": optimized_sn,
+                    "Reduction Pct": reduction_pct,
+                    "Countries": self._regular_node_count(optimized_nodes, stages),
+                    "HS Codes": 1 if raw_status in {"success", "replaced"} else 0,
+                    "c_pp Rows": 0,
+                    "c_pn Rows": 0,
+                    "c_np Rows": 0,
+                    "Bound Hits": 0,
+                    "Scaled Sources": 0,
+                    "Overflow Before Scaling": 0,
+                    "Special Total": optimized_totals["total_special"],
+                    "Beta 1": record.get("beta_1", ""),
+                    "Beta 2": record.get("beta_2", ""),
+                    "Selection Type": record.get("selected_type", ""),
+                    "Selection Reason": record.get("reason", ""),
+                    "Stage Slug": record.get("stage_slug", STAGE_GROUP_SLUGS.get(stage_group, "")),
+                    "Failure": "",
+                }
+            )
+        return rows
+
     def get_unknown_breakdown_rows(
         self,
         metal: str,
@@ -489,7 +676,7 @@ class OutputRepository:
         scenario: str,
         cobalt_mode: str = "mid",
     ) -> list[dict[str, Any]]:
-        if scenario != "first_optimization":
+        if not is_optimization_scenario(scenario):
             return []
 
         baseline_nodes = self.load_case_csv(metal, year, "baseline", "nodes", cobalt_mode)
@@ -552,7 +739,7 @@ class OutputRepository:
         scenario: str,
         cobalt_mode: str = "mid",
     ) -> list[dict[str, Any]]:
-        if scenario != "first_optimization":
+        if not is_optimization_scenario(scenario):
             return []
 
         baseline_links = self.load_case_csv(metal, year, "baseline", "links", cobalt_mode)
@@ -617,8 +804,6 @@ class OutputRepository:
         return rows
 
     def get_comparison_row(self, metal: str, year: int, scenario: str, cobalt_mode: str = "mid") -> dict[str, Any]:
-        if scenario == "first_optimization" and self.first_optimization_tables.available:
-            return self.first_optimization_tables.comparison_row(metal, year)
         baseline = self.get_summary_row(metal, year, "baseline", cobalt_mode)
         optimized = self.get_summary_row(metal, year, scenario, cobalt_mode)
         return _comparison_from_rows(baseline, optimized)
@@ -635,7 +820,7 @@ class OutputRepository:
         return frame
 
     def _load_coefficient_frame(self, scenario: str, metal: str, cobalt_mode: str) -> pd.DataFrame:
-        cache_key = (scenario, cobalt_mode)
+        cache_key = (scenario, metal, cobalt_mode)
         if cache_key in self._coefficient_frame_cache:
             return self._coefficient_frame_cache[cache_key]
         intermediate_dir = self.scenario_output_dirs[scenario] / "intermediate"
@@ -649,16 +834,84 @@ class OutputRepository:
         if path is None:
             wildcard_candidates = sorted(intermediate_dir.glob("*coefficients*.csv"))
             path = wildcard_candidates[0] if wildcard_candidates else preferred_candidates[0]
-        frame = pd.read_csv(path).fillna("") if path.exists() else pd.DataFrame()
+        frame = pd.read_csv(path).fillna("") if path.exists() else self._load_selected_workbook_coefficients(scenario, metal)
         self._coefficient_frame_cache[cache_key] = frame
         return frame
 
+    def _load_selected_workbook_coefficients(self, scenario: str, metal: str) -> pd.DataFrame:
+        """Build coefficient explorer rows from selected optimizer reports when CSV diagnostics are not bundled."""
+        selected = self.selected_parameter_frames.get(scenario, pd.DataFrame())
+        if selected.empty or "workbook_path" not in selected.columns:
+            return pd.DataFrame()
+        rows = selected[
+            selected.get("metal", pd.Series("", index=selected.index)).astype(str).eq(metal)
+            & selected.get("status", pd.Series("", index=selected.index)).astype(str).str.lower().eq("replaced")
+        ].copy()
+        if rows.empty:
+            return pd.DataFrame()
+
+        coefficient_rows: list[dict[str, Any]] = []
+        for selected_record in rows.to_dict(orient="records"):
+            workbook_path = _resolve_selected_workbook_path(Path(str(selected_record.get("workbook_path", "")).strip()))
+            stage_slug = str(selected_record.get("stage_slug", "")).strip()
+            transition = STAGE_SLUG_TRANSITIONS.get(stage_slug, "")
+            if not workbook_path.exists() or not transition:
+                continue
+            try:
+                sheet_frames = {
+                    coefficient_class: pd.read_excel(workbook_path, sheet_name=sheet_name).fillna("")
+                    for coefficient_class, (sheet_name, _value_column, _exporter_column, _importer_column) in COEFFICIENT_WORKBOOK_SPECS.items()
+                }
+            except Exception:
+                continue
+
+            exposure_totals: dict[str, float] = {}
+            for sheet_frame in sheet_frames.values():
+                if sheet_frame.empty:
+                    continue
+                for record in sheet_frame.to_dict(orient="records"):
+                    hs_key = str(record.get("hs_code", "") or record.get("folder_name", "") or "")
+                    exposure_totals[hs_key] = exposure_totals.get(hs_key, 0.0) + _safe_float(record.get("raw_trade_quantity_t"))
+
+            for coefficient_class, sheet_frame in sheet_frames.items():
+                if sheet_frame.empty:
+                    continue
+                _sheet_name, value_column, exporter_column, importer_column = COEFFICIENT_WORKBOOK_SPECS[coefficient_class]
+                for record in sheet_frame.to_dict(orient="records"):
+                    folder_name = str(record.get("folder_name", "") or "")
+                    hs_key = str(record.get("hs_code", "") or folder_name)
+                    optimized_value = _safe_float(record.get(value_column))
+                    lower = _safe_float(record.get("Cmin"))
+                    upper = _safe_float(record.get("Cmax"))
+                    exposure = _safe_float(record.get("raw_trade_quantity_t"))
+                    total_exposure = exposure_totals.get(hs_key, 0.0)
+                    coefficient_rows.append(
+                        {
+                            "metal": metal,
+                            "year": _safe_int(selected_record.get("year")),
+                            "transition": transition,
+                            "folder_name": folder_name,
+                            "coefficient_class": coefficient_class,
+                            "exporter": _safe_int(record.get(exporter_column)) if exporter_column else "",
+                            "importer": _safe_int(record.get(importer_column)) if importer_column else "",
+                            "coef_value": optimized_value,
+                            "recommended_value": _safe_float(record.get("Crec")),
+                            "lower_bound": lower,
+                            "upper_bound": upper,
+                            "hit_lower": int(abs(optimized_value - lower) <= 1e-9),
+                            "hit_upper": int(abs(optimized_value - upper) <= 1e-9),
+                            "exposure": exposure,
+                            "exposure_share": (exposure / total_exposure) if abs(total_exposure) > 1e-9 else 0.0,
+                        }
+                    )
+        return pd.DataFrame(coefficient_rows).fillna("") if coefficient_rows else pd.DataFrame()
+
     def get_transition_rows(self, metal: str, year: int, scenario: str, cobalt_mode: str = "mid") -> list[dict[str, Any]]:
-        if scenario == "first_optimization" and self.first_optimization_tables.available:
-            return self.first_optimization_tables.transition_rows(metal, year)
-        if scenario != "first_optimization":
+        if not is_optimization_scenario(scenario):
             return []
         frame = self._load_transition_frame(scenario, metal, cobalt_mode)
+        if frame.empty or not {"metal", "year"}.issubset(frame.columns):
+            return []
         rows = frame[(frame["metal"] == metal) & (frame["year"] == year)].copy()
         if rows.empty:
             return []
@@ -684,8 +937,8 @@ class OutputRepository:
                 {"label": PARAMETER_LABELS.get(key, key), "value": value}
                 for key, value in _ordered_param_items(params)
             ]
-            diagnostic_version = "first_optimization" if scenario == "first_optimization" else "baseline"
-            is_advanced = scenario == "first_optimization" or bool(coefficient_summary)
+            diagnostic_version = "optimization" if is_optimization_scenario(scenario) else "baseline"
+            is_advanced = is_optimization_scenario(scenario) or bool(coefficient_summary)
             signal_source = coefficient_summary if is_advanced and coefficient_summary else multipliers
             has_signal = bool(signal_source) or stage_unknown > 0.0 or non_source > 0.0 or non_target > 0.0 or abs(flow_delta) > 1e-9
 
@@ -840,14 +1093,68 @@ class OutputRepository:
                 return mode_results[cobalt_mode]
         return self.feasibility_by_scenario[scenario]["best_params_by_metal"].get(metal, {})
 
+    def _selected_parameter_rows(
+        self,
+        metal: str,
+        scenario: str,
+        cobalt_mode: str = "mid",
+        year: int | None = None,
+        compare: bool = False,
+    ) -> list[dict[str, Any]]:
+        del cobalt_mode
+        frame = self.selected_parameter_frames.get(scenario, pd.DataFrame())
+        if frame.empty:
+            return []
+        rows = frame[frame["metal"].astype(str).eq(metal)].copy()
+        if year is not None and "year" in rows:
+            rows = rows[rows["year"].astype(str).eq(str(year))]
+        if rows.empty:
+            return []
+
+        stage_rank = {"s1_s2_s3": 0, "s3_s4_s5": 1, "s5_s6_s7": 2}
+        rows["_stage_rank"] = rows.get("stage_slug", pd.Series("", index=rows.index)).astype(str).map(stage_rank).fillna(99)
+        rows["_year_sort"] = pd.to_numeric(rows.get("year", pd.Series(0, index=rows.index)), errors="coerce").fillna(0)
+        rows = rows.sort_values(["_year_sort", "_stage_rank"])
+
+        output: list[dict[str, Any]] = [
+            {
+                "parameter": "Mode",
+                **(
+                    {"baseline": "Original precomputed result", "optimized": SCENARIO_LABELS.get(scenario, scenario)}
+                    if compare
+                    else {"value": SCENARIO_LABELS.get(scenario, scenario), "note": "Selected normalized optimizer export."}
+                ),
+            }
+        ]
+        for record in rows.to_dict(orient="records"):
+            stage_slug = str(record.get("stage_slug", ""))
+            stage_label = stage_slug.replace("_", "-").upper() if stage_slug else "Stage"
+            row_year = str(record.get("year", "")).strip()
+            prefix = f"{row_year} {stage_label}".strip() if year is None else stage_label
+            values = [
+                ("Status", record.get("status", "")),
+                ("Beta 1", record.get("beta_1", "")),
+                ("Beta 2", record.get("beta_2", "")),
+                ("Optimized SN Total", record.get("optimized_SN_total", "")),
+                ("Factor Deviation Weighted Mean", record.get("factor_dev_weighted_mean", "")),
+                ("Selection Reason", record.get("reason", "")),
+            ]
+            for label, value in values:
+                if value in ("", None):
+                    continue
+                item = {"parameter": f"{prefix} {label}"}
+                if compare:
+                    item.update({"baseline": "-", "optimized": value})
+                else:
+                    item.update({"value": value, "note": "Selected stage hyperparameter" if label in {"Beta 1", "Beta 2"} else ""})
+                output.append(item)
+        return output
 
     def get_producer_coefficient_rows(self, metal: str, year: int, scenario: str, cobalt_mode: str = "mid") -> list[dict[str, Any]]:
         if scenario == "baseline":
             return []
-        if scenario == "first_optimization" and self.first_optimization_tables.available:
-            return self.first_optimization_tables.producer_coefficient_rows(metal, year)
         frame = self._load_coefficient_frame(scenario, metal, cobalt_mode)
-        if frame.empty:
+        if frame.empty or not {"metal", "year"}.issubset(frame.columns):
             return []
         rows = frame[(frame["metal"] == metal) & (frame["year"].astype(str) == str(year))].copy()
         if rows.empty:
@@ -912,56 +1219,36 @@ class OutputRepository:
         return decoded
 
     def build_metric_rows(self, metal: str, year: int, scenario: str, table_view: str, cobalt_mode: str = "mid") -> list[dict[str, Any]]:
-        if scenario == "first_optimization" and self.first_optimization_tables.available:
-            return self.first_optimization_tables.metric_rows(metal, year)
         if table_view == "compare" and scenario != "baseline":
-            comparison = self.get_comparison_row(metal, year, scenario, cobalt_mode)
-            rows: list[dict[str, Any]] = []
-            for key, label in METRIC_ORDER:
-                baseline_value = comparison[f"{key}_baseline"]
-                optimized_value = comparison[f"{key}_optimized"]
-                rows.append(
-                    {
-                        "metric": label,
-                        "baseline": baseline_value,
-                        "optimized": optimized_value,
-                        "delta": optimized_value - baseline_value,
-                    }
-                )
-            rows.append(
-                {
-                    "metric": "Unknown Reduction %",
-                    "baseline": "",
-                    "optimized": "",
-                    "delta": comparison["unknown_reduction_pct"],
-                }
+            stage_rows = self._stage_group_comparison_rows(metal, year, scenario, cobalt_mode)
+            supported_rows = [row for row in stage_rows if str(row.get("Status", "")).lower() == "success"] or stage_rows
+            original_total = sum(_safe_float(row.get("Original SN")) for row in supported_rows)
+            optimized_total = sum(_safe_float(row.get("Optimized SN")) for row in supported_rows)
+            reduction = original_total - optimized_total
+            reduction_pct = (reduction / original_total) if abs(original_total) > 1e-9 else 0.0
+            coefficient_total = sum(
+                _safe_int(row.get("c_pp Rows")) + _safe_int(row.get("c_pn Rows")) + _safe_int(row.get("c_np Rows"))
+                for row in supported_rows
             )
-            return rows
+            return [
+                {"Metric": "Supported Stage Groups", "Value": f"{len(supported_rows)} / {len(stage_rows)}", "Note": ""},
+                {"Metric": "Original SN Total", "Value": original_total, "Note": "Sum across selected stage-group diagnostics."},
+                {"Metric": "Optimized SN Total", "Value": optimized_total, "Note": f"{SCENARIO_LABELS.get(scenario, scenario)} runtime snapshot."},
+                {"Metric": "SN Reduction", "Value": reduction, "Note": ""},
+                {"Metric": "SN Reduction Pct", "Value": reduction_pct, "Note": ""},
+                {"Metric": "c_pp / c_pn / c_np Rows", "Value": coefficient_total, "Note": "Coefficient rows are shown when the selected optimizer export publishes coefficient diagnostics."},
+                {"Metric": "Bound Hits", "Value": sum(_safe_int(row.get("Bound Hits")) for row in supported_rows), "Note": "Rows whose optimized coefficient equals Cmin or Cmax."},
+                {"Metric": "Scaled Sources", "Value": sum(_safe_int(row.get("Scaled Sources")) for row in supported_rows), "Note": "Count of source-side scaling events recorded for the selected export."},
+                {"Metric": "Overflow Before Scaling", "Value": sum(_safe_float(row.get("Overflow Before Scaling")) for row in supported_rows), "Note": ""},
+                {"Metric": "Representative Special Total", "Value": sum(_safe_float(row.get("Special Total")) for row in supported_rows), "Note": ""},
+            ]
 
         summary = self.get_summary_row(metal, year, scenario, cobalt_mode)
         return [{"metric": label, "value": summary[key]} for key, label in METRIC_ORDER]
 
     def build_stage_rows(self, metal: str, year: int, scenario: str, table_view: str, cobalt_mode: str = "mid") -> list[dict[str, Any]]:
-        if scenario == "first_optimization" and self.first_optimization_tables.available:
-            return self.first_optimization_tables.stage_rows(metal, year)
         if table_view == "compare" and scenario != "baseline":
-            baseline_rows = {row["stage"]: row for row in self.get_stage_rows(metal, year, "baseline", cobalt_mode)}
-            optimized_rows = {row["stage"]: row for row in self.get_stage_rows(metal, year, scenario, cobalt_mode)}
-            rows: list[dict[str, Any]] = []
-            for stage in sorted(set(baseline_rows) | set(optimized_rows)):
-                base = baseline_rows.get(stage, {})
-                opt = optimized_rows.get(stage, {})
-                rows.append(
-                    {
-                        "stage": stage,
-                        "baseline_unknown": base.get("unknown_total", 0.0),
-                        "optimized_unknown": opt.get("unknown_total", 0.0),
-                        "unknown_delta": opt.get("unknown_total", 0.0) - base.get("unknown_total", 0.0),
-                        "baseline_special": base.get("special_total", 0.0),
-                        "optimized_special": opt.get("special_total", 0.0),
-                    }
-                )
-            return rows
+            return self._stage_group_comparison_rows(metal, year, scenario, cobalt_mode)
 
         return self.get_stage_rows(metal, year, scenario, cobalt_mode)
 
@@ -973,11 +1260,33 @@ class OutputRepository:
         cobalt_mode: str = "mid",
         year: int | None = None,
     ) -> list[dict[str, Any]]:
-        if scenario == "first_optimization" and self.first_optimization_tables.available:
-            return self.first_optimization_tables.parameter_rows(metal, year)
         if table_view == "compare" and scenario != "baseline":
             best = self.get_best_params(metal, scenario, cobalt_mode)
             params = best.get("best_params", {})
+            runtime_rows = [
+                {
+                    "parameter": "Data Source",
+                    "baseline": "Original precomputed result",
+                    "optimized": f"{SCENARIO_LABELS.get(scenario, scenario)} selected optimizer export",
+                    "note": "Analysis reads the active runtime bundle without exposing private file paths.",
+                },
+                {
+                    "parameter": "Result Sync",
+                    "baseline": "Original runtime snapshot",
+                    "optimized": f"Published {SCENARIO_LABELS.get(scenario, scenario)} runtime snapshot",
+                    "note": "Selected optimizer tables are synchronized into the current Sankey runtime format before rendering.",
+                },
+                {
+                    "parameter": "Solver",
+                    "baseline": "-",
+                    "optimized": "Precomputed normalized optimization output",
+                    "note": "Solver details are summarized from public runtime metadata only.",
+                },
+            ]
+            if not params:
+                selected_rows = self._selected_parameter_rows(metal, scenario, cobalt_mode, year, compare=True)
+                if selected_rows:
+                    return runtime_rows + selected_rows
             rows = [
                 {
                     "parameter": "Mode",
@@ -993,7 +1302,7 @@ class OutputRepository:
                         "optimized": value,
                     }
                 )
-            return rows
+            return runtime_rows + rows
 
         if scenario == "baseline":
             return [
@@ -1006,6 +1315,10 @@ class OutputRepository:
 
         best = self.get_best_params(metal, scenario, cobalt_mode)
         params = best.get("best_params", {})
+        if not params:
+            selected_rows = self._selected_parameter_rows(metal, scenario, cobalt_mode, year)
+            if selected_rows:
+                return selected_rows
         return [
             {
                 "parameter": PARAMETER_LABELS.get(key, key),
@@ -1021,22 +1334,24 @@ class OutputRepository:
             f"Display result: {SCENARIO_LABELS.get(scenario, scenario)}.",
             "The website reads precomputed node / link / summary files directly from the current runtime data layout under data/.",
             "No sankey_algo-style recomputation is triggered when you refresh the view.",
-            "Diagnostics stay hidden in guest mode and switch to stage-level optimization summaries in non-guest mode.",
+            "Analysis stays hidden in guest mode and switches to stage-level optimization summaries in non-guest mode.",
         ]
         if metal == "Co":
             notes.append(f"Cobalt scenario: {str(cobalt_mode or 'mid').capitalize()}.")
-        if scenario == "first_optimization":
+        if is_optimization_scenario(scenario):
             notes.append(
-                "First Optimization is synchronized from the latest conversion_factor_optimization output into the published runtime snapshot before the Sankey is rendered."
+                f"{SCENARIO_LABELS.get(scenario, scenario)} is served from the selected normalized optimizer export in the active runtime bundle."
             )
             notes.append(
-                "Overview, stage outcomes, stage diagnostics, source-scaling rows, and coefficient tables summarize factor_c_pp / factor_c_pn / factor_c_np outputs without changing the rest of the site workflow."
+                "Overview, stage outcomes, selected stage hyperparameters, and unknown-node movement compare original and optimized Sankey exports without changing the rest of the site workflow."
             )
         if scenario != "baseline":
             best = self.get_best_params(metal, scenario, cobalt_mode)
-            notes.append(
-                f"{metal} {SCENARIO_LABELS.get(scenario, scenario)} improved {best.get('cases_improved', 0)} of {best.get('case_count', 0)} yearly cases."
-            )
+            case_count = best.get("case_count", 0)
+            if case_count:
+                notes.append(
+                    f"{metal} {SCENARIO_LABELS.get(scenario, scenario)} improved {best.get('cases_improved', 0)} of {case_count} yearly cases."
+                )
         else:
             notes.append("Original mode mirrors the current exported baseline result before optimization adjustments.")
         return notes
@@ -1061,9 +1376,26 @@ def get_repository() -> OutputRepository:
         if config.first_optimization_diagnostics_root.exists()
         else config.instance_dir / "conversion_factor_optimization" / "output"
     )
+    optimization_data_roots: dict[str, Path] = {}
+    optimization_diagnostics_roots: dict[str, Path] = {}
+    for scenario, directory_name in OPTIMIZATION_DATA_DIRS.items():
+        scenario_root = config.data_dir / directory_name
+        optimization_data_roots[scenario] = (
+            scenario_root
+            if (scenario_root / "optimized").exists()
+            else first_optimization_data_root
+        )
+        scenario_diagnostics_root = scenario_root / "diagnostics"
+        optimization_diagnostics_roots[scenario] = (
+            scenario_diagnostics_root
+            if scenario_diagnostics_root.exists()
+            else first_optimization_diagnostics_root
+        )
     return OutputRepository(
         original_data_root=original_data_root,
         first_optimization_data_root=first_optimization_data_root,
         first_optimization_diagnostics_root=first_optimization_diagnostics_root,
         version_output_root=config.output_versions_root,
+        optimization_data_roots=optimization_data_roots,
+        optimization_diagnostics_roots=optimization_diagnostics_roots,
     )

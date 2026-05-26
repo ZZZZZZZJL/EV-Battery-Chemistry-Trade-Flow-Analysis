@@ -79,4 +79,52 @@ export class ApiClient {
     this.inFlight = { key: cacheKey, promise };
     return promise.then((payload) => clonePayload(payload));
   }
+
+  async requestVulnerabilitySensitivityOptions(request) {
+    const response = await fetch("/api/vulnerability/sensitivity/options", {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(request),
+    });
+    return parseResponse(response, "Vulnerability sensitivity options request failed.");
+  }
+
+  async requestVulnerabilityStageProfile(request) {
+    const response = await fetch("/api/vulnerability/stage-profile", {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(request),
+    });
+    return parseResponse(response, "Vulnerability stage profile request failed.");
+  }
+
+  async requestVulnerabilityCountryVi(request) {
+    const response = await fetch("/api/vulnerability/country-vi", {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(request),
+    });
+    return parseResponse(response, "Country VI request failed.");
+  }
+
+  async recalculateVulnerabilitySensitivity(request) {
+    const response = await fetch("/api/vulnerability/sensitivity/recalculate", {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(request),
+    });
+    return parseResponse(response, "Vulnerability sensitivity recalculation failed.");
+  }
 }

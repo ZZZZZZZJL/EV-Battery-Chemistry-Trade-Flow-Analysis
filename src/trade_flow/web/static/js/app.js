@@ -2,6 +2,7 @@ import { hydrateStateFromUrl, syncStateToUrl } from "./app_state.js";
 import { ApiClient } from "./api_client.js";
 import { FigureController } from "./figure_controller.js";
 import { debounce, setShellBusy } from "./ui_shell.js";
+import { VULNERABILITY_DASHBOARD_DATA } from "./vulnerability_data.js?v=2427";
 
 const state = {
   theme: "light",
@@ -34,6 +35,54 @@ const state = {
     tradeStage: "all",
     tradeStatus: "all",
   },
+  vulnerabilityCountry: "",
+  vulnerabilityMetal: "",
+  vulnerabilityMaterial: "",
+  vulnerabilityCompareCountries: [],
+  vulnerabilityTrendCountry: "",
+  vulnerabilityTrendPair: "",
+  vulnerabilityTrendCompareCountries: [],
+  vulnerabilityCountryVisible: {},
+  vulnerabilityStageProfileYear: null,
+  vulnerabilityStageProfilePair: "",
+  vulnerabilityStageProfileResultMode: "",
+  vulnerabilityTrendVisible: {
+    baseline: true,
+    pareto_optimal: true,
+    sn_minimum: true,
+    deviation_minimum: true,
+  },
+  vulnerabilityStageProfile: {
+    key: "",
+    data: null,
+    loading: false,
+    error: "",
+  },
+  vulnerabilityCountryVi: {
+    key: "",
+    data: null,
+    loading: false,
+    error: "",
+  },
+  vulnerabilitySensitivity: {
+    resultMode: "",
+    selectedMetal: "",
+    selectedMaterial: "",
+    selectedPair: "",
+    draftCountry: "",
+    draftStep: "refining",
+    draftScenarioProduction: "",
+    edits: [],
+    options: null,
+    optionsKey: "",
+    optionsLoading: false,
+    optionsError: "",
+    reportCountry: "",
+    outputCountry: "",
+    resultLoading: false,
+    resultError: "",
+    result: null,
+  },
   years: [],
   stageLabels: {},
   stageOrder: [],
@@ -45,6 +94,7 @@ const state = {
     chemistry: false,
     aggregateNmcNca: false,
   },
+  workspaceView: "sankey",
   selectedOrderStage: "S1",
   layoutState: {},
   lastChartHeight: 0,
@@ -76,6 +126,10 @@ let loadDebounceTimer = 0;
 let diagnosticSearchTimer = 0;
 let orderLayoutShell = null;
 let orderLayoutRail = null;
+let selectionMenuOpen = null;
+let vulnerabilityTrendPlotFrame = 0;
+let vulnerabilityStageProfilePlotFrame = 0;
+let vulnerabilitySensitivityStageProfilePlotFrame = 0;
 
 function syncWorkspaceLayout(chartHeightHint = state.lastChartHeight || 0) {
   const chartFrame = document.querySelector(".chart-frame");
@@ -129,6 +183,7 @@ function ensureLayoutState(metal, resultMode, cobaltMode = state.cobaltMode) {
       orders: {},
       specialPositions: {},
       aggregateCounts: {},
+      aggregatePreserve: {},
     };
   }
   return state.layoutState[variantKey];
@@ -138,8 +193,20 @@ function currentLayoutState() {
   return ensureLayoutState(state.metal, state.resultMode, state.cobaltMode);
 }
 
+const RESULT_LABEL_OVERRIDES = {
+  pareto_optimal: "Multiobjective",
+};
+
 function resultModeLabel(value) {
-  return state.resultLabels[value] || value;
+  return RESULT_LABEL_OVERRIDES[value] || state.resultLabels[value] || value;
+}
+
+function optimizationModes() {
+  return state.resultModes.filter((mode) => mode !== "baseline");
+}
+
+function isOptimizationMode(mode = state.resultMode) {
+  return optimizationModes().includes(mode);
 }
 
 function cobaltModeLabel(value) {
@@ -151,6 +218,196 @@ function setStatus(text, kind = "ok") {
   pill.textContent = text;
   pill.classList.remove("ok", "warn");
   pill.classList.add(kind);
+}
+
+const WORKSPACE_VIEW_TARGETS = {
+  sankey: "diagram-board",
+  analysis: "data-board",
+  vulnerability: "vulnerability-board",
+};
+
+const ANALYSIS_WORKSPACE_LABELS = {
+  analysis: "Optimization",
+  vulnerability: "Vulnerability Index",
+};
+
+const VULNERABILITY_RESULT_SERIES = [
+  { key: "baseline", label: "Original", className: "baseline", color: "#496d9b" },
+  { key: "pareto_optimal", label: "Multiobjective", className: "pareto", color: "#6fa27b" },
+  { key: "sn_minimum", label: "SN Minimum", className: "sn-minimum", color: "#bd7143" },
+  { key: "deviation_minimum", label: "Deviation Minimum", className: "deviation", color: "#7b6ab0" },
+];
+
+const VULNERABILITY_CASE_GUIDE = [
+  {
+    key: "proportional",
+    label: "Base VI",
+    eyebrow: "Default exposure",
+    description: "Share of cathode material whose supply-chain path includes the focal country while unknown cathode destinations remain separate.",
+  },
+  {
+    key: "minimum",
+    label: "Minimum",
+    eyebrow: "Lower bound",
+    description: "Optimistic treatment of ambiguous paths that assigns uncertain flows away from the focal country whenever the data allow it.",
+  },
+  {
+    key: "maximumKnown",
+    label: "Maximum A",
+    eyebrow: "Known-flow upper bound",
+    description: "Upper-bound exposure using known trade and production links, before adding the broadest unknown-destination assumption.",
+  },
+  {
+    key: "maximumWithUnknown",
+    label: "Maximum B",
+    eyebrow: "Unknown-inclusive upper bound",
+    description: "Most conservative case that also lets eligible unknown destinations count toward exposure, so values can saturate near 100%.",
+  },
+];
+
+const VULNERABILITY_TREND_CASES = VULNERABILITY_CASE_GUIDE.map(({ key, label }) => ({ key, label }));
+
+const VULNERABILITY_COUNTRY_LINE_STYLES = [
+  { dash: "solid", symbol: "circle" },
+  { dash: "dash", symbol: "square" },
+  { dash: "dot", symbol: "diamond" },
+  { dash: "dashdot", symbol: "triangle-up" },
+];
+
+const VULNERABILITY_SENSITIVITY_STEPS = [
+  { key: "mining", label: "Mining", weight: 0.28 },
+  { key: "processing", label: "Processing", weight: 0.24 },
+  { key: "refining", label: "Refining", weight: 0.3 },
+  { key: "cathode", label: "Cathode", weight: 0.18 },
+];
+
+function workspaceViewFromHash(hash = window.location.hash) {
+  if (hash === "#data-board") {
+    return "analysis";
+  }
+  if (hash === "#vulnerability-board") {
+    return "vulnerability";
+  }
+  return "sankey";
+}
+
+function setSectionVisible(element, isVisible) {
+  if (!element) {
+    return;
+  }
+  element.hidden = !isVisible;
+  element.classList.toggle("workspace-view-hidden", !isVisible);
+}
+
+function updateWorkspaceNavigationState() {
+  document.querySelectorAll("[data-workspace-view]").forEach((link) => {
+    const isActive = link.dataset.workspaceView === state.workspaceView;
+    link.classList.toggle("active", isActive);
+    if (isActive) {
+      link.setAttribute("aria-current", "page");
+    } else {
+      link.removeAttribute("aria-current");
+    }
+  });
+  const analysisMenu = document.getElementById("analysis-workspace-menu");
+  const analysisValue = document.getElementById("analysis-workspace-value");
+  const isAnalysisSubView = state.workspaceView === "analysis" || state.workspaceView === "vulnerability";
+  document.getElementById("top-nav-details")?.classList.toggle("is-analysis-controls", isAnalysisSubView);
+  analysisMenu?.classList.toggle("active", isAnalysisSubView);
+  if (analysisValue) {
+    analysisValue.textContent = ANALYSIS_WORKSPACE_LABELS[state.workspaceView] || "Choose";
+  }
+}
+
+function applyWorkspaceView() {
+  const isSankey = state.workspaceView === "sankey";
+  setSectionVisible(document.getElementById("diagram-board"), isSankey);
+  setSectionVisible(document.getElementById("order-board"), isSankey);
+  setSectionVisible(document.getElementById("data-board"), state.workspaceView === "analysis");
+  setSectionVisible(document.getElementById("vulnerability-board"), state.workspaceView === "vulnerability");
+  document.body.dataset.workspaceView = state.workspaceView;
+  updateWorkspaceNavigationState();
+  if (state.workspaceView === "vulnerability") {
+    // The VI workspace can be activated from a previously hidden section. Plotly
+    // measures the host element at draw time, so every chart family needs a
+    // fresh draw pass after the section becomes visible.
+    scheduleVulnerabilityStageProfilePlot();
+    scheduleVulnerabilityTrendPlots();
+    scheduleVulnerabilitySensitivityStageProfilePlot();
+  }
+}
+
+function showWorkspaceView(view, options = {}) {
+  state.workspaceView = Object.prototype.hasOwnProperty.call(WORKSPACE_VIEW_TARGETS, view) ? view : "sankey";
+  applyWorkspaceView();
+  closeSelectionMenus();
+  const targetId = options.targetId || WORKSPACE_VIEW_TARGETS[state.workspaceView];
+  if (options.updateHash) {
+    const nextHash = `#${targetId}`;
+    if (window.location.hash !== nextHash) {
+      window.history.pushState(null, "", `${window.location.pathname}${window.location.search}${nextHash}`);
+    }
+  }
+  if (options.scroll) {
+    document.getElementById(targetId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+}
+
+function setControlsCollapsed(isCollapsed) {
+  const nav = document.getElementById("top-nav-details");
+  const panel = document.getElementById("top-nav-panel");
+  const toggle = document.getElementById("top-nav-controls-toggle");
+  nav?.classList.toggle("is-controls-collapsed", Boolean(isCollapsed));
+  if (panel) {
+    panel.hidden = Boolean(isCollapsed);
+  }
+  toggle?.setAttribute("aria-expanded", isCollapsed ? "false" : "true");
+}
+
+function bindControlsToggle() {
+  const toggle = document.getElementById("top-nav-controls-toggle");
+  if (!toggle) {
+    return;
+  }
+  toggle.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    closeSelectionMenus();
+    const nav = document.getElementById("top-nav-details");
+    setControlsCollapsed(!nav?.classList.contains("is-controls-collapsed"));
+  });
+}
+
+function bindWorkspaceNavigation() {
+  document.querySelectorAll("[data-workspace-view]").forEach((link) => {
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      showWorkspaceView(link.dataset.workspaceView, {
+        updateHash: true,
+        scroll: true,
+        targetId: WORKSPACE_VIEW_TARGETS[link.dataset.workspaceView] || "diagram-board",
+      });
+    });
+  });
+  document.getElementById("order-studio-jump")?.addEventListener("click", (event) => {
+    event.preventDefault();
+    showWorkspaceView("sankey", { updateHash: true, scroll: true, targetId: "order-board" });
+  });
+  window.addEventListener("hashchange", () => {
+    const nextView = workspaceViewFromHash(window.location.hash);
+    if (nextView !== state.workspaceView) {
+      state.workspaceView = nextView;
+      applyWorkspaceView();
+    }
+  });
+  window.addEventListener("popstate", () => {
+    const nextView = workspaceViewFromHash(window.location.hash);
+    if (nextView !== state.workspaceView) {
+      state.workspaceView = nextView;
+      applyWorkspaceView();
+    }
+  });
 }
 
 function renderPills(container, items, activeValue, onSelect, formatter) {
@@ -169,22 +426,41 @@ function renderPills(container, items, activeValue, onSelect, formatter) {
   });
 }
 
-function updateStateChips(payload = {}) {
-  const host = document.getElementById("state-chip-row");
-  if (!host) {
+function renderSelectionMenuStates() {
+  document.querySelectorAll("[data-selection-menu-trigger]").forEach((trigger) => {
+    const menuName = trigger.dataset.selectionMenuTrigger;
+    const menu = trigger.closest(".selection-menu");
+    const isOpen = selectionMenuOpen === menuName;
+    menu?.classList.toggle("is-open", isOpen);
+    trigger.setAttribute("aria-expanded", isOpen ? "true" : "false");
+  });
+}
+
+function closeSelectionMenus() {
+  if (!selectionMenuOpen) {
     return;
   }
+  selectionMenuOpen = null;
+  renderSelectionMenuStates();
+}
+
+function setSelectionValue(id, value) {
+  const host = document.getElementById(id);
+  if (host) {
+    host.textContent = value;
+  }
+}
+
+function updateStateChips(payload = {}) {
+  const metal = payload.metal || state.metal;
+  const year = payload.year || state.year;
   const resultLabel = resultModeLabel(payload.resultMode || state.resultMode);
-  const cobaltLabel = (payload.metal || state.metal) === "Co" ? cobaltModeLabel(state.cobaltMode) : "";
-  const chips = [
-    payload.metal || state.metal,
-    String(payload.year || state.year),
-    resultLabel,
-    cobaltLabel,
-  ].filter(Boolean);
-  host.innerHTML = chips
-    .map((chip) => `<span class="state-chip">${escapeHtml(chip)}</span>`)
-    .join("");
+  const cobaltLabel = metal === "Co" ? cobaltModeLabel(state.cobaltMode) : "";
+  setSelectionValue("metal-selection-value", metal);
+  setSelectionValue("year-selection-value", String(year));
+  setSelectionValue("result-selection-value", resultLabel);
+  setSelectionValue("cobalt-selection-value", cobaltLabel);
+  renderSelectionMenuStates();
 }
 
 function syncS7DisplayFromPayload(payload = {}) {
@@ -260,8 +536,8 @@ function renderThemeButtons() {
 
 function renderMetalButtons() {
   const container = document.getElementById("metal-buttons");
-  const note = document.getElementById("metal-note");
   container.innerHTML = "";
+  setSelectionValue("metal-selection-value", state.metal);
   state.metals.forEach((metal) => {
     const button = document.createElement("button");
     button.type = "button";
@@ -281,13 +557,14 @@ function renderMetalButtons() {
       state.referenceQty = state.referenceQtyDefaults[metal.id] || state.referenceQty;
       ensureLayoutState(state.metal, state.resultMode, state.cobaltMode);
       document.getElementById("reference-qty-input").value = Math.round(state.referenceQty);
+      closeSelectionMenus();
       renderMetalButtons();
       renderCobaltModeButtons();
       await loadFigure();
     });
     container.appendChild(button);
   });
-  note.textContent = "Ni, Li, and Co are currently active datasets for this optimization viewer.";
+  renderSelectionMenuStates();
 }
 
 function renderCobaltModeButtons() {
@@ -296,8 +573,12 @@ function renderCobaltModeButtons() {
   const note = document.getElementById("cobalt-mode-note");
   const isVisible = state.metal === "Co";
   block.classList.toggle("is-hidden", !isVisible);
+  setSelectionValue("cobalt-selection-value", isVisible ? cobaltModeLabel(state.cobaltMode) : "");
   if (!isVisible) {
     container.innerHTML = "";
+    if (selectionMenuOpen === "cobalt") {
+      closeSelectionMenus();
+    }
     return;
   }
   renderPills(
@@ -307,12 +588,16 @@ function renderCobaltModeButtons() {
     async (mode) => {
       state.cobaltMode = mode;
       ensureLayoutState(state.metal, state.resultMode, state.cobaltMode);
+      closeSelectionMenus();
       renderCobaltModeButtons();
       await loadFigure();
     },
     cobaltModeLabel,
   );
-  note.textContent = "Cobalt reads three frozen scenario exports. Middle, Max, and Min are all served from precomputed files rather than rebuilt on the fly.";
+  if (note) {
+    note.textContent = "Cobalt reads three frozen scenario exports. Middle, Max, and Min are all served from precomputed files rather than rebuilt on the fly.";
+  }
+  renderSelectionMenuStates();
 }
 
 function renderAccessControls() {
@@ -341,9 +626,9 @@ function renderAccessControls() {
   passwordWrap.classList.toggle("is-hidden", !needsPassword);
   note.textContent =
     state.accessMode === "guest"
-      ? "Guest mode hides stage totals, country production values, and Diagnostics."
+      ? "Guest mode hides stage totals, country production values, and Analysis."
       : state.accessUnlocked
-        ? "Non-guest mode is unlocked. Full diagnostics and production values are visible."
+        ? "Non-guest mode is unlocked. Full analysis and production values are visible."
         : "Enter the password to unlock non-guest mode.";
 }
 
@@ -354,7 +639,7 @@ async function unlockAnalystMode() {
     await loadFigure({ immediate: true, force: true });
     state.accessUnlocked = true;
     renderAccessControls();
-    document.querySelector(".advanced-panel")?.removeAttribute("open");
+    renderVulnerabilitySensitivityPanel();
   } catch (error) {
     state.accessUnlocked = false;
     renderAccessControls();
@@ -463,6 +748,46 @@ function getAggregateCount(stage, config) {
   return resolved;
 }
 
+function itemIdentity(item) {
+  return String(item?.key || item?.label || "");
+}
+
+function getAggregatePreserveList(stage) {
+  const layout = currentLayoutState();
+  const values = Array.isArray(layout.aggregatePreserve?.[stage])
+    ? layout.aggregatePreserve[stage]
+    : [];
+  const resolved = Array.from(new Set(values.map((value) => String(value)).filter(Boolean)));
+  layout.aggregatePreserve[stage] = resolved;
+  return resolved;
+}
+
+function syncAggregatePreserve(stage, items) {
+  const validKeys = new Set(items.map((item) => itemIdentity(item)).filter(Boolean));
+  const filtered = getAggregatePreserveList(stage).filter((key) => validKeys.has(key));
+  currentLayoutState().aggregatePreserve[stage] = filtered;
+  return filtered;
+}
+
+function setAggregatePreserveList(stage, keys) {
+  currentLayoutState().aggregatePreserve[stage] = Array.from(new Set(keys.map((key) => String(key)).filter(Boolean)));
+}
+
+function aggregateTailKeySet(items, aggregateCount, preserveSet = new Set()) {
+  if (!aggregateCount || aggregateCount <= 0) {
+    return new Set();
+  }
+  const tailKeys = [];
+  for (let index = items.length - 1; index >= 0 && tailKeys.length < aggregateCount; index -= 1) {
+    const key = itemIdentity(items[index]);
+    if (!key || preserveSet.has(key)) {
+      continue;
+    }
+    tailKeys.push(key);
+  }
+  return new Set(tailKeys);
+}
+
 function getSpecialPosition(stage, config) {
   const layout = currentLayoutState();
   const fallback = config.specialPosition || state.defaultSpecialNodePosition || "first";
@@ -503,6 +828,7 @@ function buildFigureRequest() {
     stageOrders: layout.orders,
     specialPositions: layout.specialPositions,
     aggregateCounts: layout.aggregateCounts,
+    aggregatePreserve: layout.aggregatePreserve,
     s7ViewMode: currentS7ViewMode(),
     s7AggregateNmcNca: state.s7Display.aggregateNmcNca,
   };
@@ -558,10 +884,17 @@ async function runFigureLoad(options = {}) {
       ...layoutState.aggregateCounts,
       ...(payload.aggregateCounts || {}),
     };
+    layoutState.aggregatePreserve = {
+      ...layoutState.aggregatePreserve,
+      ...(payload.aggregatePreserve || {}),
+    };
     state.referenceQty = payload.referenceQuantity;
     state.lastStageControls = payload.stageControls || {};
     document.getElementById("reference-qty-input").value = Math.round(payload.referenceQuantity);
-    const optimizationLabel = payload.resultMode === "first_optimization" ? "with flow optimization" : "without flow optimization";
+    const payloadResultLabel = resultModeLabel(payload.resultMode || state.resultMode);
+    const optimizationLabel = isOptimizationMode(payload.resultMode)
+      ? `with ${payloadResultLabel} flow optimization`
+      : "without flow optimization";
     const cobaltSuffix = payload.metal === "Co" ? ` (${cobaltModeLabel(state.cobaltMode)} scenario)` : "";
     document.getElementById("chart-title").textContent =
       `The Sankey Diagram for ${payload.metal} in ${payload.year} ${optimizationLabel}${cobaltSuffix}`;
@@ -571,12 +904,14 @@ async function runFigureLoad(options = {}) {
     renderDatasetStatus(payload.datasetStatus);
     renderOrderBoard(payload.stageControls);
     renderTables(payload.tables);
+    renderVulnerabilityDashboard();
     document.getElementById("table-status").textContent =
       state.accessMode === "guest"
-          ? "Guest view: diagnostics preview is locked. Unlock Analyst mode for values and drilldowns."
+          ? "Guest view: analysis preview is locked. Unlock Analyst mode for values and drilldowns."
         : state.resultMode === "baseline"
-          ? `Diagnostics: Original only. Switch to First Optimization for optimizer-stage summaries.`
-          : `Diagnostics: ${resultModeLabel(payload.resultMode)} stage summaries, bounds, source scaling, and coefficient explorers.`;
+          ? "Analysis: Original only. Choose Optimization for optimizer-stage summaries."
+          : `Analysis: ${payloadResultLabel} stage summaries, source scaling, and optimization explorers.`;
+    applyWorkspaceView();
     state.lastChartHeight = Number(payload.figure?.layout?.height || 0);
     await renderChartFigure(payload.figure);
     if (renderToken !== figureRenderToken) {
@@ -668,15 +1003,19 @@ function addManualDragHandlers(entry, stage, label, layout, grid) {
   });
 }
 
-function buildOrderEntry({ stage, item, mode, layout, grid, isAggregatedTail }) {
+function buildOrderEntry({ stage, item, mode, layout, grid, aggregateActive = false, isAggregatedTail = false, isPreserved = false, isPreservedTail = false }) {
   const entry = document.createElement("div");
   entry.className = "order-item";
   if (isAggregatedTail) {
     entry.classList.add("tail-item");
   }
+  if (isPreserved) {
+    entry.classList.add("preserved-item");
+  }
   entry.draggable = mode === "manual";
   entry.dataset.stage = stage;
   entry.dataset.label = item.label;
+  entry.dataset.key = itemIdentity(item);
   const valueMarkup =
     state.accessMode === "analyst"
       ? `<span class="order-item-value">${numberFormatter.format(item.value)} t</span>`
@@ -691,10 +1030,36 @@ function buildOrderEntry({ stage, item, mode, layout, grid, isAggregatedTail }) 
         ${rankMarkup}
         <span class="order-item-label">${escapeHtml(item.label)}</span>
       </div>
+      ${isPreservedTail ? '<span class="preserve-badge">Kept from tail</span>' : ""}
+      ${isPreserved && !isPreservedTail ? '<span class="preserve-badge">Kept</span>' : ""}
       ${isAggregatedTail ? '<span class="tail-badge">Aggregated tail</span>' : ""}
     </div>
-    ${valueMarkup}
+    <div class="order-item-actions">
+      ${valueMarkup}
+    </div>
   `;
+  if (aggregateActive) {
+    const actionHost = entry.querySelector(".order-item-actions");
+    const keepButton = document.createElement("button");
+    keepButton.type = "button";
+    keepButton.className = "order-keep-toggle";
+    keepButton.textContent = isPreserved ? "Kept" : "Keep";
+    keepButton.setAttribute("aria-pressed", isPreserved ? "true" : "false");
+    keepButton.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const key = itemIdentity(item);
+      const current = new Set(getAggregatePreserveList(stage));
+      if (current.has(key)) {
+        current.delete(key);
+      } else {
+        current.add(key);
+      }
+      setAggregatePreserveList(stage, Array.from(current));
+      await loadFigure();
+    });
+    actionHost?.prepend(keepButton);
+  }
   if (mode === "manual") {
     addManualDragHandlers(entry, stage, item.label, layout, grid);
   }
@@ -702,11 +1067,13 @@ function buildOrderEntry({ stage, item, mode, layout, grid, isAggregatedTail }) 
 }
 
 function renderGroupedItems(list, items, stage, mode, layout, grid, aggregateCount) {
-  const tailLabels = new Set(
-    mode === "continent" || aggregateCount <= 0 ? [] : items.slice(-aggregateCount).map((item) => item.label),
-  );
+  const preservedKeys = new Set(syncAggregatePreserve(stage, items));
+  const aggregateActive = mode !== "continent" && aggregateCount > 0;
+  const tailKeys = aggregateActive ? aggregateTailKeySet(items, aggregateCount, preservedKeys) : new Set();
+  const naturalTailKeys = aggregateActive ? aggregateTailKeySet(items, aggregateCount, new Set()) : new Set();
   let currentGroup = null;
   items.forEach((item) => {
+    const key = itemIdentity(item);
     const group = item.group || "Unknown";
     if (group !== currentGroup) {
       currentGroup = group;
@@ -726,7 +1093,10 @@ function renderGroupedItems(list, items, stage, mode, layout, grid, aggregateCou
         mode,
         layout,
         grid,
-        isAggregatedTail: tailLabels.has(item.label),
+        aggregateActive,
+        isAggregatedTail: tailKeys.has(key),
+        isPreserved: preservedKeys.has(key),
+        isPreservedTail: preservedKeys.has(key) && naturalTailKeys.has(key),
       }),
     );
   });
@@ -747,6 +1117,10 @@ function buildOrderStageEditor(stage, config, grid) {
   const items = getRenderedItems(stage, config);
   const specialPosition = getSpecialPosition(stage, config);
   const aggregateCount = getAggregateCount(stage, config);
+  const aggregateDisabled = mode === "continent" || (config.maxAggregateCount || 0) === 0;
+  const aggregateActive = !aggregateDisabled && aggregateCount > 0;
+  const preservedKeys = new Set(syncAggregatePreserve(stage, items));
+  const preservedItems = items.filter((item) => preservedKeys.has(itemIdentity(item)));
 
   const card = document.createElement("article");
   card.className = "order-card order-card-active";
@@ -822,26 +1196,47 @@ function buildOrderStageEditor(stage, config, grid) {
 
   const aggregateControl = document.createElement("div");
   aggregateControl.className = "aggregate-control";
-  const aggregateDisabled = mode === "continent" || (config.maxAggregateCount || 0) === 0;
   aggregateControl.innerHTML = `
-    <label class="aggregate-label" for="aggregate-${stage}">Aggregate tail count</label>
-    <input
-      id="aggregate-${stage}"
-      class="aggregate-input"
-      type="number"
-      min="0"
-      max="${config.maxAggregateCount || 0}"
-      step="1"
-      value="${aggregateCount}"
-      ${aggregateDisabled ? "disabled" : ""}
-    />
-    <div class="aggregate-note">${
-      mode === "continent"
-        ? "This mode consolidates the chart into one continent node for this stage."
-        : config.maxAggregateCount > 0
-          ? `Collapse the last 0-${config.maxAggregateCount} items into one node after sorting.`
-          : "This stage does not have enough standalone nodes to aggregate."
-    }</div>
+    <div class="aggregate-count-panel">
+      <label class="aggregate-label" for="aggregate-${stage}">Aggregate tail count</label>
+      <input
+        id="aggregate-${stage}"
+        class="aggregate-input"
+        type="number"
+        min="0"
+        max="${config.maxAggregateCount || 0}"
+        step="1"
+        value="${aggregateCount}"
+        ${aggregateDisabled ? "disabled" : ""}
+      />
+      <div class="aggregate-note">${
+        mode === "continent"
+          ? "This mode consolidates the chart into one continent node for this stage."
+          : config.maxAggregateCount > 0
+            ? `Collapse the last 0-${config.maxAggregateCount} items into one node after sorting.`
+            : "This stage does not have enough standalone nodes to aggregate."
+      }</div>
+    </div>
+    <div class="aggregate-preserve-panel ${aggregateActive ? "" : "is-muted"}">
+      <div class="aggregate-label">Preserved countries</div>
+      <div class="preserve-chip-row">
+        ${
+          preservedItems.length
+            ? preservedItems
+                .map((item) => {
+                  const key = itemIdentity(item);
+                  return `
+                    <span class="preserve-chip">
+                      ${escapeHtml(item.label)}
+                      <button type="button" data-preserve-key="${escapeHtml(key)}" aria-label="Remove ${escapeHtml(item.label)} from preserved countries">x</button>
+                    </span>
+                  `;
+                })
+                .join("")
+            : `<span class="preserve-empty">${aggregateActive ? "No preserved countries" : "Set tail count to enable preserves"}</span>`
+        }
+      </div>
+    </div>
   `;
   const aggregateInput = aggregateControl.querySelector("input");
   if (aggregateInput) {
@@ -862,6 +1257,17 @@ function buildOrderStageEditor(stage, config, grid) {
       });
     }
   }
+  aggregateControl.querySelectorAll("[data-preserve-key]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const key = String(button.getAttribute("data-preserve-key") || "");
+      if (!key) {
+        return;
+      }
+      const next = getAggregatePreserveList(stage).filter((value) => value !== key);
+      setAggregatePreserveList(stage, next);
+      await loadFigure();
+    });
+  });
   body.appendChild(aggregateControl);
 
   const list = document.createElement("div");
@@ -871,7 +1277,10 @@ function buildOrderStageEditor(stage, config, grid) {
   } else if (mode === "continent") {
     renderGroupedItems(list, items, stage, mode, layout, grid, 0);
   } else {
+    const tailKeys = aggregateActive ? aggregateTailKeySet(items, aggregateCount, preservedKeys) : new Set();
+    const naturalTailKeys = aggregateActive ? aggregateTailKeySet(items, aggregateCount, new Set()) : new Set();
     items.forEach((item) => {
+      const key = itemIdentity(item);
       list.appendChild(
         buildOrderEntry({
           stage,
@@ -879,7 +1288,10 @@ function buildOrderStageEditor(stage, config, grid) {
           mode,
           layout,
           grid,
-          isAggregatedTail: false,
+          aggregateActive,
+          isAggregatedTail: tailKeys.has(key),
+          isPreserved: preservedKeys.has(key),
+          isPreservedTail: preservedKeys.has(key) && naturalTailKeys.has(key),
         }),
       );
     });
@@ -1359,6 +1771,10 @@ function buildOptimizationImpactOverviewHtml(metricRows, stageRows, unknownRows)
   const reductionPct = asNumber(metricValue(metricRows, "SN Reduction Pct"));
   const boundHits = asNumber(metricValue(metricRows, "Bound Hits"));
   const scaledSources = asNumber(metricValue(metricRows, "Scaled Sources"));
+  const scaledSourceNote =
+    scaledSources > 0
+      ? `${formatValue(scaledSources, "value")} source-side scaling events recorded`
+      : "No source-side scaling events recorded";
   const bestStage = [...optimizedStages].sort(
     (left, right) =>
       asNumber(right["Original SN"]) - asNumber(right["Optimized SN"]) -
@@ -1400,7 +1816,7 @@ function buildOptimizationImpactOverviewHtml(metricRows, stageRows, unknownRows)
     <section class="impact-overview">
       <div class="impact-hero">
         <div>
-          <span class="impact-label">Original to First Optimization</span>
+          <span class="impact-label">Original to ${escapeHtml(resultModeLabel(state.resultMode))}</span>
           <div class="impact-flow">
             <strong>${escapeHtml(formatValue(originalTotal, "value"))}</strong>
             <span>to</span>
@@ -1411,7 +1827,7 @@ function buildOptimizationImpactOverviewHtml(metricRows, stageRows, unknownRows)
         <div class="impact-score">
           <span>SN reduction</span>
           <strong>${escapeHtml(formatValue(reductionPct, "pct"))}</strong>
-          <small>${escapeHtml(formatValue(scaledSources, "value"))} scaled sources in this view</small>
+          <small>${escapeHtml(scaledSourceNote)}</small>
         </div>
       </div>
       <div class="impact-insight-grid">
@@ -1546,12 +1962,13 @@ function buildStageComparisonHtml(rows) {
     return "";
   }
 
+  const optimizedLabel = resultModeLabel(state.resultMode);
   const maxOriginal = Math.max(...optimizedRows.map((row) => asNumber(row["Original SN"])), 1);
   return `
     <section class="stage-comparison-panel">
       <div class="transition-panel-head">
         <strong>Stage Group Comparison</strong>
-        <span>Original SN and First Optimization SN are compared side by side for each synchronized S1-S2-S3 style group.</span>
+        <span>Original SN and ${escapeHtml(optimizedLabel)} SN are compared side by side for each synchronized S1-S2-S3 style group.</span>
       </div>
       <div class="stage-comparison-table-wrap">
         <table class="data-table stage-comparison-table">
@@ -1559,7 +1976,7 @@ function buildStageComparisonHtml(rows) {
             <tr>
               <th>Stage group</th>
               <th>Original SN</th>
-              <th>First Optimization SN</th>
+              <th>${escapeHtml(optimizedLabel)} SN</th>
               <th>Reduction</th>
               <th>Reduction pct</th>
               <th>Status</th>
@@ -1614,7 +2031,7 @@ function buildStageComparisonHtml(rows) {
 
 function buildUnknownBreakdownHtml(rows) {
   if (!rows || !rows.length) {
-    return `<div class="order-empty">Unknown node breakdown is available when First Optimization publishes synchronized node diagnostics.</div>`;
+    return `<div class="order-empty">Unknown node breakdown is available when the selected optimization result publishes synchronized node analysis.</div>`;
   }
   const grouped = new Map();
   [...rows]
@@ -1777,7 +2194,7 @@ function buildParameterOverviewHtml(rows) {
       <div class="parameter-group-grid parameter-group-grid-single">
         ${buildParameterGroupHtml(
           "Original Mode",
-          "Baseline mode does not introduce optimizer weights, bounds, or synchronized factor diagnostics.",
+          "Baseline mode does not introduce optimizer weights, bounds, or synchronized factor analysis.",
           normalizedRows,
         )}
       </div>
@@ -1787,6 +2204,12 @@ function buildParameterOverviewHtml(rows) {
   const runtimeRows = ["Data Source", "Result Sync", "Solver"].map((label) => findRowByLabel(normalizedRows, label)).filter(Boolean);
   const weightRows = ["alpha", "beta_pp", "beta_pn", "beta_np"].map((label) => findRowByLabel(normalizedRows, label)).filter(Boolean);
   const boundsRows = ["Bounds", "Source Scaling", "Special Handling", "HS Memo Rules"].map((label) => findRowByLabel(normalizedRows, label)).filter(Boolean);
+  const groupedLabels = new Set(
+    ["Data Source", "Result Sync", "Solver", "alpha", "beta_pp", "beta_pn", "beta_np", "Bounds", "Source Scaling", "Special Handling", "HS Memo Rules"].map(
+      normalizeLabel,
+    ),
+  );
+  const selectedStageRows = normalizedRows.filter((row) => !groupedLabels.has(normalizeLabel(row.label)));
 
   return `
     <div class="parameter-group-grid">
@@ -1804,6 +2227,11 @@ function buildParameterOverviewHtml(rows) {
         "Bounds, Scaling And HS Memo",
         "Constraint behavior, special handling, source scaling, and memo-driven HS rules.",
         boundsRows,
+      )}
+      ${buildParameterGroupHtml(
+        "Selected Stage Settings",
+        "Stage-level status, beta weights, and selection notes for the chosen optimization result.",
+        selectedStageRows,
       )}
     </div>
   `;
@@ -2047,6 +2475,7 @@ function filteredCoefficientRows(rows) {
 }
 
 function buildCoefficientIntroHtml(rows, visibleRows) {
+  const selectedResultLabel = resultModeLabel(state.resultMode);
   const classCounts = rows.reduce((accumulator, row) => {
     const key = row.coefficient_class || "Unknown";
     accumulator[key] = (accumulator[key] || 0) + 1;
@@ -2079,7 +2508,7 @@ function buildCoefficientIntroHtml(rows, visibleRows) {
     .join(" | ");
   const busiestStage = Object.entries(stageCounts).sort((left, right) => right[1] - left[1])[0];
   const summaryItems = [
-    { label: "Visible Rows", value: visibleRows.length, note: `${rows.length} total coefficient rows in this First Optimization export.` },
+    { label: "Visible Rows", value: visibleRows.length, note: `${rows.length} total coefficient rows in this ${selectedResultLabel} export.` },
     { label: "Stage Groups", value: Object.keys(stageCounts).length, note: busiestStage ? `${busiestStage[0]} has ${busiestStage[1]} coefficient rows.` : "" },
     { label: "HS Codes", value: uniqueHsCodes.size, note: "Unique HS codes represented by the optimizer coefficient output." },
     { label: "Class Mix", value: classSummary || "-", note: "c_pp / c_pn / c_np identify how the row participates in the balance equations." },
@@ -2095,7 +2524,7 @@ function buildCoefficientIntroHtml(rows, visibleRows) {
 
   return `
     <section class="producer-coefficient-intro">
-      <p>First Optimization chooses coefficients within Cmin/Cmax while minimizing unknown-node mass and weighted movement away from the recommended value. Use the filters to inspect one coefficient row, then compare its stage with the trade flows below.</p>
+      <p>${escapeHtml(selectedResultLabel)} chooses coefficients within Cmin/Cmax while minimizing unknown-node mass and weighted movement away from the recommended value. Use the filters to inspect one coefficient row, then compare its stage with the trade flows below.</p>
       <div class="producer-summary-grid">
         ${summaryItems.map((item) => buildFactTileHtml(item)).join("")}
       </div>
@@ -2200,7 +2629,7 @@ function buildCoefficientDetailHtml(row, tradeRows) {
 
 function buildProducerCoefficientSectionsHtml(rows, tradeRows = []) {
   if (!rows || !rows.length) {
-    return `<div class="order-empty">Coefficient rows are only available when First Optimization exposes factor outputs.</div>`;
+    return `<div class="order-empty">Coefficient rows are only available when the selected optimization result exposes factor outputs.</div>`;
   }
 
   const visibleRows = filteredCoefficientRows(rows);
@@ -2326,9 +2755,10 @@ function filteredTradeRows(rows) {
 
 function buildTradeFlowExplorerHtml(rows) {
   if (!rows || !rows.length) {
-    return `<div class="order-empty">Trade-flow comparison is available when Original and First Optimization link exports are both present.</div>`;
+    return `<div class="order-empty">Trade-flow comparison is available when Original and a selected optimization link export are both present.</div>`;
   }
 
+  const selectedResultLabel = resultModeLabel(state.resultMode);
   const visibleRows = filteredTradeRows(rows);
   const stageOptions = optionList(rows, (row) => row.stage_group || "Other", "All stages", ["S1-S2-S3", "S3-S4-S5", "S5-S6-S7", "Other"]);
   const statusOptions = optionList(rows, (row) => row.status || "Unknown", "All statuses", ["Reduced", "Increased", "Removed", "New", "Flat"]);
@@ -2374,7 +2804,7 @@ function buildTradeFlowExplorerHtml(rows) {
               <th>Flow</th>
               <th>Type</th>
               <th>Original</th>
-              <th>First Optimization</th>
+              <th>${escapeHtml(selectedResultLabel)}</th>
               <th>Change</th>
               <th>Status</th>
             </tr>
@@ -2407,6 +2837,2655 @@ function buildTradeFlowExplorerHtml(rows) {
       </div>
     </section>
   `;
+}
+
+function vulnerabilityCaseEntries(record) {
+  if (!record) {
+    return [];
+  }
+  return [
+    {
+      key: "proportional",
+      label: VULNERABILITY_DASHBOARD_DATA.caseLabels.proportional,
+      value: record.proportional ?? record.proportionalMean,
+    },
+    {
+      key: "minimum",
+      label: VULNERABILITY_DASHBOARD_DATA.caseLabels.minimum,
+      value: record.minimum ?? record.minimumMean,
+    },
+    {
+      key: "maximumKnown",
+      label: VULNERABILITY_DASHBOARD_DATA.caseLabels.maximumKnown,
+      value: record.maximumKnown ?? record.maximumKnownMean,
+    },
+    {
+      key: "maximumWithUnknown",
+      label: VULNERABILITY_DASHBOARD_DATA.caseLabels.maximumWithUnknown,
+      value: record.maximumWithUnknown ?? record.maximumWithUnknownMean,
+    },
+  ];
+}
+
+function formatVulnerabilityPercent(value) {
+  if (value === null || value === undefined || value === "") {
+    return "N/A";
+  }
+  const numeric = asNumber(value);
+  if (!Number.isFinite(numeric)) {
+    return "N/A";
+  }
+  const digits = Math.abs(numeric) < 0.01 && numeric !== 0 ? 2 : 1;
+  return `${(numeric * 100).toFixed(digits)}%`;
+}
+
+function vulnerabilityPercentWidth(value) {
+  if (value === null || value === undefined || value === "") {
+    return "0%";
+  }
+  const numeric = asNumber(value);
+  if (!Number.isFinite(numeric)) {
+    return "0%";
+  }
+  return `${Math.min(100, Math.max(0, numeric * 100)).toFixed(1)}%`;
+}
+
+function buildVulnerabilityDeltaBadge(value) {
+  if (value === null || value === undefined || value === "") {
+    return '<span class="delta-badge neutral">-</span>';
+  }
+  const numeric = asNumber(value);
+  const className = numeric < 0 ? "positive" : numeric > 0 ? "negative" : "neutral";
+  const prefix = numeric > 0 ? "+" : "";
+  return `<span class="delta-badge ${className}">${escapeHtml(`${prefix}${formatVulnerabilityPercent(numeric)}`)}</span>`;
+}
+
+function vulnerabilityMetalId() {
+  const allowed = (state.metals || []).map((metal) => metal.id || metal).filter(Boolean);
+  if (!state.vulnerabilityMetal || (allowed.length && !allowed.includes(state.vulnerabilityMetal))) {
+    state.vulnerabilityMetal = allowed.includes(state.metal) ? state.metal : allowed[0] || state.metal;
+  }
+  return state.vulnerabilityMetal;
+}
+
+function vulnerabilityCobaltMode(metal = vulnerabilityMetalId()) {
+  return metal === "Co" ? state.cobaltMode : "default";
+}
+
+function parseVulnerabilityPair(pair) {
+  const [material = "", metal = ""] = String(pair || "").split("-");
+  return { material, metal };
+}
+
+function vulnerabilityPairForMaterial(material = state.vulnerabilityMaterial, metal = vulnerabilityMetalId()) {
+  const cleanMaterial = String(material || "").trim();
+  return cleanMaterial && metal ? `${cleanMaterial}-${metal}` : "";
+}
+
+function vulnerabilityMaterialSortKey(material) {
+  const order = { LFP: 0, NCA: 1, NMC: 2, NCX: 3 };
+  return [order[material] ?? 99, material];
+}
+
+function sortVulnerabilityMaterials(materials) {
+  return Array.from(new Set(materials.filter(Boolean))).sort((a, b) => {
+    const left = vulnerabilityMaterialSortKey(a);
+    const right = vulnerabilityMaterialSortKey(b);
+    return left[0] - right[0] || String(left[1]).localeCompare(String(right[1]));
+  });
+}
+
+function currentVulnerabilityScopeRows(rows, { includeResult = true } = {}) {
+  const metal = vulnerabilityMetalId();
+  return (rows || []).filter((row) => {
+    const matchesMetal = !row.metal || row.metal === metal;
+    const matchesYear = !row.year || Number(row.year) === Number(state.year);
+    const matchesResult = !includeResult || !row.resultMode || row.resultMode === state.resultMode;
+    const matchesCobalt = metal !== "Co" || !row.coCase || row.coCase === "default" || row.coCase === vulnerabilityCobaltMode(metal);
+    return matchesMetal && matchesYear && matchesResult && matchesCobalt;
+  });
+}
+
+function vulnerabilityCountryOptions() {
+  const metal = vulnerabilityMetalId();
+  const trendSourceRows = VULNERABILITY_DASHBOARD_DATA.countryPairTrendRows || VULNERABILITY_DASHBOARD_DATA.countryTrendRows || [];
+  const scopeRows = trendSourceRows.filter((row) => {
+    const matchesMetal = row.metal === metal;
+    const matchesCobalt = metal !== "Co" || !row.coCase || row.coCase === "default" || row.coCase === vulnerabilityCobaltMode(metal);
+    return matchesMetal && matchesCobalt;
+  });
+  const countryNames = Array.from(new Set(scopeRows.map((row) => row.country).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+  const rankedRows = currentVulnerabilityScopeRows(VULNERABILITY_DASHBOARD_DATA.countryRows);
+  const rankedNames = rankedRows.map((row) => row.country).filter(Boolean);
+  return Array.from(new Set([...rankedNames, ...countryNames]));
+}
+
+function vulnerabilityPairRowsForCountry(country, options = {}) {
+  const metal = vulnerabilityMetalId();
+  const rows = VULNERABILITY_DASHBOARD_DATA.countryPairTrendRows || [];
+  if (!country || !rows.length) {
+    return [];
+  }
+  const requestedYear = options.year === undefined ? null : Number(options.year);
+  const requestedResult = options.resultMode || null;
+  return rows.filter((row) => {
+    const matchesMetal = row.metal === metal;
+    const matchesCountry = row.country === country;
+    const matchesCobalt = metal !== "Co" || !row.coCase || row.coCase === "default" || row.coCase === vulnerabilityCobaltMode(metal);
+    const matchesYear = !Number.isFinite(requestedYear) || Number(row.year) === requestedYear;
+    const matchesResult = !requestedResult || row.resultMode === requestedResult;
+    return matchesMetal && matchesCountry && matchesCobalt && matchesYear && matchesResult;
+  });
+}
+
+function vulnerabilityMaterialOptionsForCountry(country, options = {}) {
+  const exactRows = vulnerabilityPairRowsForCountry(country, options);
+  const fallbackRows = exactRows.length ? exactRows : vulnerabilityPairRowsForCountry(country);
+  const materials = fallbackRows
+    .map((row) => row.chemistry || parseVulnerabilityPair(row.materialPair).material)
+    .filter(Boolean);
+  if (materials.includes("NMC") && materials.includes("NCA")) {
+    materials.push("NCX");
+  }
+  return sortVulnerabilityMaterials(materials);
+}
+
+function vulnerabilityPairOptionsForCountry(country, options = {}) {
+  const metal = vulnerabilityMetalId();
+  return vulnerabilityMaterialOptionsForCountry(country, options).map((material) => ({
+    chemistry: material,
+    pair: vulnerabilityPairForMaterial(material, metal),
+    label: material,
+  }));
+}
+
+function defaultVulnerabilityPairForCountry(country, options = {}) {
+  const exactRows = vulnerabilityPairRowsForCountry(country, options);
+  const fallbackRows = exactRows.length ? exactRows : vulnerabilityPairRowsForCountry(country);
+  if (fallbackRows.length) {
+    const bestRow = fallbackRows.reduce((best, row) => {
+      const currentValue = asNumber(row.proportional);
+      const bestValue = asNumber(best?.proportional);
+      return !best || (Number.isFinite(currentValue) && currentValue > bestValue) ? row : best;
+    }, null);
+    if (bestRow?.materialPair) {
+      return bestRow.materialPair;
+    }
+  }
+  return vulnerabilityPairOptionsForCountry(country, options)[0]?.pair || "";
+}
+
+function defaultVulnerabilityMaterialForCountry(country, options = {}) {
+  return parseVulnerabilityPair(defaultVulnerabilityPairForCountry(country, options)).material
+    || vulnerabilityMaterialOptionsForCountry(country, options)[0]
+    || "";
+}
+
+function vulnerabilityPairOptionsHtml(pairOptions, selectedPair) {
+  return pairOptions
+    .map((entry) => `<option value="${escapeHtml(entry.pair)}" ${entry.pair === selectedPair ? "selected" : ""}>${escapeHtml(entry.label || entry.pair)}</option>`)
+    .join("");
+}
+
+function ensureVulnerabilityPairSelections() {
+  ensureVulnerabilityResultScopes();
+  const profileYear = Number(state.vulnerabilityStageProfileYear || state.year);
+  const materialOptions = vulnerabilityMaterialOptionsForCountry(state.vulnerabilityCountry, {
+    year: profileYear,
+    resultMode: vulnerabilityStageProfileResultMode(),
+  });
+  if (!materialOptions.includes(state.vulnerabilityMaterial)) {
+    state.vulnerabilityMaterial = defaultVulnerabilityMaterialForCountry(state.vulnerabilityCountry, {
+      year: profileYear,
+      resultMode: state.resultMode,
+    });
+  }
+  state.vulnerabilityStageProfilePair = vulnerabilityPairForMaterial(state.vulnerabilityMaterial);
+  state.vulnerabilityTrendCountry = state.vulnerabilityCountry;
+  state.vulnerabilityTrendPair = state.vulnerabilityStageProfilePair;
+}
+
+function ensureVulnerabilityCountry() {
+  const options = vulnerabilityCountryOptions();
+  if (!options.includes(state.vulnerabilityCountry)) {
+    state.vulnerabilityCountry = options[0] || "";
+  }
+  state.vulnerabilityTrendCountry = state.vulnerabilityCountry || options[0] || "";
+  state.vulnerabilityTrendCompareCountries = state.vulnerabilityTrendCompareCountries
+    .filter((country) => options.includes(country) && country !== state.vulnerabilityCountry)
+    .slice(0, 3);
+  state.vulnerabilityCompareCountries = state.vulnerabilityTrendCompareCountries;
+  const activeCountries = new Set([state.vulnerabilityTrendCountry, ...state.vulnerabilityTrendCompareCountries].filter(Boolean));
+  Object.keys(state.vulnerabilityCountryVisible).forEach((country) => {
+    if (!activeCountries.has(country)) {
+      delete state.vulnerabilityCountryVisible[country];
+    }
+  });
+  ensureVulnerabilityPairSelections();
+  return options;
+}
+
+function currentVulnerabilityRecord() {
+  const exact = currentVulnerabilityScopeRows(VULNERABILITY_DASHBOARD_DATA.yearlyMeans)[0];
+  if (exact) {
+    return exact;
+  }
+  return VULNERABILITY_DASHBOARD_DATA.scenarioMetrics.find((row) => row.resultMode === state.resultMode)
+    || VULNERABILITY_DASHBOARD_DATA.scenarioMetrics[0];
+}
+
+function comparisonCountryOptions(options = vulnerabilityCountryOptions()) {
+  return options.filter(
+    (country) => country !== state.vulnerabilityCountry && !state.vulnerabilityTrendCompareCountries.includes(country),
+  );
+}
+
+function vulnerabilityTrendCountries() {
+  const options = vulnerabilityCountryOptions();
+  if (!options.includes(state.vulnerabilityCountry)) {
+    state.vulnerabilityCountry = options[0] || "";
+  }
+  state.vulnerabilityTrendCountry = state.vulnerabilityCountry;
+  state.vulnerabilityTrendCompareCountries = state.vulnerabilityTrendCompareCountries
+    .filter((country) => options.includes(country) && country !== state.vulnerabilityCountry)
+    .slice(0, 3);
+  state.vulnerabilityCompareCountries = state.vulnerabilityTrendCompareCountries;
+  ensureVulnerabilityPairSelections();
+  return [state.vulnerabilityTrendCountry, ...state.vulnerabilityTrendCompareCountries].filter(Boolean);
+}
+
+function trendRowsForCountry(country) {
+  if (!country) {
+    return [];
+  }
+  const pairRows = VULNERABILITY_DASHBOARD_DATA.countryPairTrendRows || [];
+  const dynamicRows = vulnerabilityCountryViDataRows();
+  const staticRows = pairRows.length ? pairRows : (VULNERABILITY_DASHBOARD_DATA.countryTrendRows || []);
+  const sourceRows = dynamicRows.length
+    ? [
+        ...dynamicRows,
+        ...staticRows.filter((row) => row.country !== state.vulnerabilityCountry),
+      ]
+    : staticRows;
+  const selectedPair = pairRows.length
+    ? (state.vulnerabilityStageProfilePair || defaultVulnerabilityPairForCountry(country))
+    : "";
+  const metal = vulnerabilityMetalId();
+  return sourceRows.filter((row) => {
+    const matchesMetal = row.metal === metal;
+    const matchesCountry = row.country === country;
+    const matchesCobalt = metal !== "Co" || !row.coCase || row.coCase === "default" || row.coCase === vulnerabilityCobaltMode(metal);
+    const matchesPair = !selectedPair || !row.materialPair || row.materialPair === selectedPair;
+    return matchesMetal && matchesCountry && matchesCobalt && matchesPair;
+  });
+}
+
+function trendRowsForSelectedCountry() {
+  return vulnerabilityTrendCountries().flatMap((country) => trendRowsForCountry(country));
+}
+
+function vulnerabilityTrendCountryLabel() {
+  const countries = vulnerabilityTrendCountries();
+  if (!countries.length) {
+    return "Focal country";
+  }
+  return countries.join(", ");
+}
+
+function vulnerabilityTrendPairLabel() {
+  return state.vulnerabilityStageProfilePair || "All pairs";
+}
+
+function buildVulnerabilityScoreCardsHtml(record) {
+  const entries = vulnerabilityCaseEntries(record);
+  if (!entries.length) {
+    return `<div class="order-empty">No vulnerability summary is available for the current selection.</div>`;
+  }
+  return entries
+    .map(
+      (entry) => `
+        <article class="vulnerability-score-card vulnerability-score-${escapeHtml(entry.key)}">
+          <span>${escapeHtml(entry.label)}</span>
+          <strong>${escapeHtml(formatVulnerabilityPercent(entry.value))}</strong>
+          <div class="vulnerability-mini-bar" aria-hidden="true"><span style="width: ${escapeHtml(vulnerabilityPercentWidth(entry.value))}"></span></div>
+        </article>
+      `,
+    )
+    .join("");
+}
+
+function buildVulnerabilityCaseComparisonHtml() {
+  const rows = currentVulnerabilityScopeRows(VULNERABILITY_DASHBOARD_DATA.yearlyMeans, { includeResult: false });
+  const comparisonRows = rows.length ? rows : VULNERABILITY_DASHBOARD_DATA.scenarioMetrics;
+  return `
+    <div class="vulnerability-case-grid">
+      ${comparisonRows
+        .map(
+          (row) => `
+            <article class="vulnerability-case-row ${row.resultMode === state.resultMode ? "active" : ""}">
+              <div>
+                <strong>${escapeHtml(row.resultMode ? resultModeLabel(row.resultMode) : row.label)}</strong>
+                <span>${escapeHtml(row.metal ? `${row.metal} ${row.year}` : "All selected scenarios")}</span>
+              </div>
+              <div class="vulnerability-case-bars">
+                ${vulnerabilityCaseEntries(row)
+                  .map(
+                    (entry) => `
+                      <div class="vulnerability-bar-row">
+                        <span>${escapeHtml(entry.label)}</span>
+                        <div class="vulnerability-bar" aria-hidden="true"><span style="width: ${escapeHtml(vulnerabilityPercentWidth(entry.value))}"></span></div>
+                        <strong>${escapeHtml(formatVulnerabilityPercent(entry.value))}</strong>
+                      </div>
+                    `,
+                  )
+                  .join("")}
+              </div>
+            </article>
+          `,
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function vulnerabilitySeriesVisible(seriesKey) {
+  return state.vulnerabilityTrendVisible[seriesKey] !== false;
+}
+
+function vulnerabilityCountryVisible(country) {
+  return state.vulnerabilityCountryVisible[country] !== false;
+}
+
+function visibleVulnerabilityTrendCountries() {
+  return vulnerabilityTrendCountries().filter((country) => vulnerabilityCountryVisible(country));
+}
+
+function buildVulnerabilityCaseGuideHtml() {
+  return VULNERABILITY_CASE_GUIDE.map(
+    (caseConfig) => `
+      <article class="vulnerability-case-guide-card vulnerability-case-guide-${escapeHtml(caseConfig.key)}">
+        <span>${escapeHtml(caseConfig.eyebrow)}</span>
+        <strong>${escapeHtml(caseConfig.label)}</strong>
+        <p>${escapeHtml(caseConfig.description)}</p>
+      </article>
+    `,
+  ).join("");
+}
+
+function buildVulnerabilityTrendLegendHtml() {
+  return `
+    <div class="vulnerability-trend-legend" aria-label="Result legend">
+      ${vulnerabilityResultChoices().map((series) => {
+        const isVisible = vulnerabilitySeriesVisible(series.key);
+        return `
+          <button
+            class="vulnerability-legend-item vulnerability-trend-${escapeHtml(series.className)} ${isVisible ? "active" : "is-muted"}"
+            type="button"
+            data-vulnerability-series="${escapeHtml(series.key)}"
+            aria-pressed="${isVisible ? "true" : "false"}"
+            style="--series-color: ${escapeHtml(series.color)}"
+          >
+            <span class="vulnerability-legend-swatch" aria-hidden="true"></span>
+            <span>${escapeHtml(series.label)}</span>
+          </button>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+function vulnerabilityCountryLineStyleClass(dash) {
+  return `vulnerability-country-line-${String(dash || "solid").replace(/[^a-z]/g, "-")}`;
+}
+
+function vulnerabilityCountryLineStyleLabel(dash) {
+  if (dash === "dash") {
+    return "dashed";
+  }
+  if (dash === "dot") {
+    return "dotted";
+  }
+  if (dash === "dashdot") {
+    return "dash-dot";
+  }
+  return "solid";
+}
+
+function buildVulnerabilityCountryLineLegendHtml() {
+  const countries = vulnerabilityTrendCountries();
+  if (!countries.length) {
+    return "";
+  }
+  return `
+    ${countries
+      .map((country, index) => {
+        const style = VULNERABILITY_COUNTRY_LINE_STYLES[index % VULNERABILITY_COUNTRY_LINE_STYLES.length];
+        const styleLabel = vulnerabilityCountryLineStyleLabel(style.dash);
+        const isVisible = vulnerabilityCountryVisible(country);
+        return `
+          <button
+            class="vulnerability-legend-item vulnerability-country-line-item ${isVisible ? "active" : "is-muted"}"
+            type="button"
+            data-vulnerability-country-line="${escapeHtml(country)}"
+            aria-pressed="${isVisible ? "true" : "false"}"
+          >
+            <span class="vulnerability-country-line-swatch ${escapeHtml(vulnerabilityCountryLineStyleClass(style.dash))}" aria-hidden="true"></span>
+            <span>${escapeHtml(`${country}${index === 0 ? " (focal)" : ""} - ${styleLabel}`)}</span>
+          </button>
+        `;
+      })
+      .join("")}
+  `;
+}
+
+function buildVulnerabilityCombinedLegendHtml() {
+  return `
+    <div class="vulnerability-trend-legend-deck">
+      <div id="vulnerability-country-line-legend" class="vulnerability-country-line-legend" aria-label="Country line guide">
+        ${buildVulnerabilityCountryLineLegendHtml()}
+      </div>
+      ${buildVulnerabilityTrendLegendHtml()}
+    </div>
+  `;
+}
+
+function renderVulnerabilityCountryLineLegend() {
+  const host = document.getElementById("vulnerability-country-line-legend");
+  if (host) {
+    host.innerHTML = buildVulnerabilityCountryLineLegendHtml();
+  }
+}
+
+function bindVulnerabilityCountryLineLegendControls() {
+  document.querySelectorAll("[data-vulnerability-country-line]").forEach((button) => {
+    button.onclick = () => {
+      const country = button.dataset.vulnerabilityCountryLine;
+      if (!country) {
+        return;
+      }
+      state.vulnerabilityCountryVisible[country] = !vulnerabilityCountryVisible(country);
+      renderVulnerabilityCountryLineLegend();
+      bindVulnerabilityCountryLineLegendControls();
+      scheduleVulnerabilityTrendPlots();
+    };
+  });
+}
+
+function vulnerabilityTrendYears(rows) {
+  return Array.from(new Set(rows.map((row) => Number(row.year)).filter(Number.isFinite))).sort((a, b) => a - b);
+}
+
+function vulnerabilityTrendPercent(row, caseKey) {
+  if (!row || row[caseKey] === null || row[caseKey] === undefined) {
+    return null;
+  }
+  const numeric = asNumber(row[caseKey]);
+  return Number.isFinite(numeric) ? numeric * 100 : null;
+}
+
+function vulnerabilityProfileYears() {
+  const fromState = (state.years || []).map((year) => Number(year)).filter(Number.isFinite);
+  if (fromState.length) {
+    return Array.from(new Set(fromState)).sort((a, b) => a - b);
+  }
+  const rows = trendRowsForSelectedCountry();
+  return vulnerabilityTrendYears(rows);
+}
+
+function ensureVulnerabilityStageProfileYear() {
+  const years = vulnerabilityProfileYears();
+  const current = Number(state.vulnerabilityStageProfileYear);
+  if (years.includes(current)) {
+    return current;
+  }
+  const navYear = Number(state.year);
+  state.vulnerabilityStageProfileYear = years.includes(navYear) ? navYear : years[0] || navYear;
+  return Number(state.vulnerabilityStageProfileYear);
+}
+
+function buildVulnerabilityStageYearOptionsHtml(selectedYear) {
+  return vulnerabilityProfileYears()
+    .map((year) => `<option value="${escapeHtml(String(year))}" ${Number(year) === Number(selectedYear) ? "selected" : ""}>${escapeHtml(String(year))}</option>`)
+    .join("");
+}
+
+function buildVulnerabilityCountryOptionsHtml(selectedCountry) {
+  return vulnerabilityCountryOptions()
+    .map((country) => `<option value="${escapeHtml(country)}" ${country === selectedCountry ? "selected" : ""}>${escapeHtml(country)}</option>`)
+    .join("");
+}
+
+function buildVulnerabilityMetalOptionsHtml(selectedMetal = vulnerabilityMetalId()) {
+  return (state.metals || [])
+    .map((metal) => {
+      const value = metal.id || metal;
+      const label = metal.label || value;
+      return `<option value="${escapeHtml(value)}" ${value === selectedMetal ? "selected" : ""}>${escapeHtml(label)}</option>`;
+    })
+    .join("");
+}
+
+function buildVulnerabilityMaterialOptionsHtml(materialOptions, selectedMaterial = state.vulnerabilityMaterial) {
+  return materialOptions
+    .map((material) => `<option value="${escapeHtml(material)}" ${material === selectedMaterial ? "selected" : ""}>${escapeHtml(material)}</option>`)
+    .join("");
+}
+
+function vulnerabilityCountryViKey() {
+  ensureVulnerabilityPairSelections();
+  const countries = [state.vulnerabilityCountry, ...state.vulnerabilityTrendCompareCountries]
+    .filter(Boolean);
+  return [
+    vulnerabilityMetalId(),
+    vulnerabilityCobaltMode(),
+    countries.join(","),
+    state.vulnerabilityStageProfilePair || "",
+  ].join("|");
+}
+
+function vulnerabilityCountryViDataRows() {
+  if (state.vulnerabilityCountryVi.key !== vulnerabilityCountryViKey()) {
+    return [];
+  }
+  const payload = state.vulnerabilityCountryVi.data;
+  return payload?.rows || [];
+}
+
+function selectedVulnerabilityCountryPairRows() {
+  ensureVulnerabilityPairSelections();
+  const dynamicRows = vulnerabilityCountryViDataRows();
+  const rows = dynamicRows.length ? dynamicRows : (VULNERABILITY_DASHBOARD_DATA.countryPairTrendRows || []);
+  const selectedYear = ensureVulnerabilityStageProfileYear();
+  const selectedPair = state.vulnerabilityStageProfilePair;
+  const metal = vulnerabilityMetalId();
+  return rows.filter((row) => {
+    const matchesMetal = row.metal === metal;
+    const matchesCountry = row.country === state.vulnerabilityCountry;
+    const matchesPair = !selectedPair || row.materialPair === selectedPair;
+    const matchesYear = Number(row.year) === Number(selectedYear);
+    const matchesCobalt = metal !== "Co" || !row.coCase || row.coCase === "default" || row.coCase === vulnerabilityCobaltMode(metal);
+    return matchesMetal && matchesCountry && matchesPair && matchesYear && matchesCobalt;
+  });
+}
+
+function buildVulnerabilityCountryViControlsHtml() {
+  const selectedYear = ensureVulnerabilityStageProfileYear();
+  const materialOptions = vulnerabilityMaterialOptionsForCountry(state.vulnerabilityCountry, {
+    year: selectedYear,
+    resultMode: vulnerabilityStageProfileResultMode(),
+  });
+  return `
+    <div class="vulnerability-country-vi-controls" aria-label="Country VI scope controls">
+      <label class="vulnerability-country-picker" for="vulnerability-country-vi-country-select">
+        <span>Target country</span>
+        <select id="vulnerability-country-vi-country-select" class="text-input">
+          ${buildVulnerabilityCountryOptionsHtml(state.vulnerabilityCountry)}
+        </select>
+      </label>
+      <label class="vulnerability-country-picker" for="vulnerability-country-vi-metal-select">
+        <span>VI metal</span>
+        <select id="vulnerability-country-vi-metal-select" class="text-input">
+          ${buildVulnerabilityMetalOptionsHtml(vulnerabilityMetalId())}
+        </select>
+      </label>
+      <label class="vulnerability-country-picker" for="vulnerability-country-vi-material-select">
+        <span>Material type</span>
+        <select id="vulnerability-country-vi-material-select" class="text-input" ${materialOptions.length ? "" : "disabled"}>
+          ${buildVulnerabilityMaterialOptionsHtml(materialOptions, state.vulnerabilityMaterial)}
+        </select>
+      </label>
+      <label class="vulnerability-country-picker" for="vulnerability-country-vi-year-select">
+        <span>Profile year</span>
+        <select id="vulnerability-country-vi-year-select" class="text-input">
+          ${buildVulnerabilityStageYearOptionsHtml(selectedYear)}
+        </select>
+      </label>
+    </div>
+  `;
+}
+
+/**
+ * Render the compact Country VI comparison table for the currently selected
+ * target country, VI metal, material type, and year. Each row is an absolute
+ * VI value for one Conversion Factor Optimization result, split by the four
+ * graph-based VI treatments: Base VI, Minimum, Maximum A, and Maximum B.
+ *
+ * This table intentionally avoids Base-vs-Original deltas. Those comparisons
+ * are easier to interpret in the Stage Exposure Profile and Time Trend panels,
+ * where users can see how the same country/material scope changes visually.
+ */
+function buildVulnerabilityCountryResultComparisonHtml() {
+  if (state.vulnerabilityCountryVi.loading) {
+    return `<div class="order-empty">Loading exact Country VI rows for the selected metal and material...</div>`;
+  }
+  if (state.vulnerabilityCountryVi.error) {
+    return `<div class="order-empty">${escapeHtml(state.vulnerabilityCountryVi.error)}</div>`;
+  }
+  const rows = selectedVulnerabilityCountryPairRows();
+  if (!rows.length) {
+    return `<div class="order-empty">No result comparison is available for the selected Country VI scope.</div>`;
+  }
+  // Keep this table to the exact VI method values only. Delta-to-Original
+  // comparisons are intentionally omitted here because users compare result
+  // modes visually in the stage profile and time-trend panels below.
+  const byResult = new Map(rows.map((row) => [row.resultMode, row]));
+  return `
+    <section class="vulnerability-country-result-comparison" aria-label="Country VI result comparison">
+      <div class="vulnerability-country-result-head">
+        <div>
+          <strong>Result Comparison</strong>
+          <span>${escapeHtml(`${state.vulnerabilityCountry} | ${state.vulnerabilityStageProfilePair} | ${ensureVulnerabilityStageProfileYear()}`)}</span>
+        </div>
+      </div>
+      <div class="table-scroll">
+        <table class="data-table vulnerability-table vulnerability-country-result-table">
+          <thead>
+            <tr>
+              <th>Result</th>
+              <th>Base VI</th>
+              <th>Minimum</th>
+              <th>Maximum A</th>
+              <th>Maximum B</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${vulnerabilityResultChoices()
+              .map((series) => {
+                const row = byResult.get(series.key);
+                return `
+                  <tr class="${series.key === state.resultMode ? "is-active" : ""}">
+                    <th>${escapeHtml(resultModeLabel(series.key))}</th>
+                    <td>${escapeHtml(formatVulnerabilityPercent(row?.proportional))}</td>
+                    <td>${escapeHtml(formatVulnerabilityPercent(row?.minimum))}</td>
+                    <td>${escapeHtml(formatVulnerabilityPercent(row?.maximumKnown))}</td>
+                    <td>${escapeHtml(formatVulnerabilityPercent(row?.maximumWithUnknown))}</td>
+                  </tr>
+                `;
+              })
+              .join("")}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
+function buildPlotDownloadButtonHtml(plotId, label, filename) {
+  return `
+    <button
+      class="ghost-btn plot-download-btn"
+      type="button"
+      data-download-plot="${escapeHtml(plotId)}"
+      data-download-filename="${escapeHtml(filename)}"
+      aria-label="${escapeHtml(`Download ${label}`)}"
+    >
+      Download PNG
+    </button>
+  `;
+}
+
+function buildVulnerabilityTrendChartShellHtml(caseConfig) {
+  const plotId = `vulnerability-plot-${caseConfig.key}`;
+  const pairLabel = vulnerabilityTrendPairLabel();
+  return `
+    <article class="vulnerability-trend-chart" data-vulnerability-case="${escapeHtml(caseConfig.key)}">
+      <div class="vulnerability-trend-head">
+        <div>
+          <strong>${escapeHtml(caseConfig.label)}</strong>
+          <span>${escapeHtml(`${vulnerabilityTrendCountryLabel()} | ${pairLabel}`)}</span>
+        </div>
+        ${buildPlotDownloadButtonHtml(plotId, `${caseConfig.label} trend`, `country-vi-${vulnerabilityMetalId()}-${caseConfig.key}-trend`)}
+      </div>
+      <div
+        id="${escapeHtml(plotId)}"
+        class="vulnerability-plot-host"
+        role="img"
+        aria-label="${escapeHtml(`${caseConfig.label} trend for ${vulnerabilityTrendCountryLabel()}`)}"
+      ></div>
+    </article>
+  `;
+}
+
+function vulnerabilityStageProfileKey() {
+  const profileYear = ensureVulnerabilityStageProfileYear();
+  ensureVulnerabilityPairSelections();
+  const metal = vulnerabilityMetalId();
+  const resultMode = vulnerabilityStageProfileResultMode();
+  return [
+    metal,
+    profileYear,
+    resultMode,
+    vulnerabilityCobaltMode(metal),
+    state.vulnerabilityCountry || "",
+    state.vulnerabilityStageProfilePair || "",
+  ].join("|");
+}
+
+function vulnerabilityStageProfileRequest() {
+  ensureVulnerabilityPairSelections();
+  const metal = vulnerabilityMetalId();
+  return {
+    metal,
+    year: ensureVulnerabilityStageProfileYear(),
+    resultMode: vulnerabilityStageProfileResultMode(),
+    cobaltMode: state.cobaltMode,
+    country: state.vulnerabilityCountry,
+    pair: state.vulnerabilityStageProfilePair,
+  };
+}
+
+function vulnerabilityStageProfileLegendSegments(profile) {
+  const byId = new Map();
+  Object.values(profile?.composition || {}).forEach((segments) => {
+    (segments || []).forEach((segment) => {
+      if (!segment?.id || segment.id === "__other__") {
+        return;
+      }
+      if (!byId.has(segment.id)) {
+        byId.set(segment.id, segment);
+      }
+    });
+  });
+  return Array.from(byId.values()).sort((a, b) => {
+    if (a.id === profile?.countryId) return -1;
+    if (b.id === profile?.countryId) return 1;
+    return String(a.label).localeCompare(String(b.label));
+  });
+}
+
+function buildVulnerabilityStageProfileLegendHtml(profile) {
+  const segments = vulnerabilityStageProfileLegendSegments(profile);
+  if (!segments.length) {
+    return "";
+  }
+  return `
+    <div class="vulnerability-stage-country-legend" aria-label="Stage profile country labels">
+      <span>Displayed countries</span>
+      ${segments
+        .map((segment) => `
+          <span class="vulnerability-stage-country-chip" style="--profile-color: ${escapeHtml(segment.color)}">
+            <i aria-hidden="true"></i>
+            <strong>${escapeHtml(segment.abbr)}</strong>
+            <span>${escapeHtml(segment.label)}</span>
+          </span>
+        `)
+        .join("")}
+    </div>
+  `;
+}
+
+function buildVulnerabilityStageProfileControlsHtml() {
+  const selectedResult = vulnerabilityStageProfileResultMode();
+  return `
+    <div class="vulnerability-stage-profile-actions">
+      <label class="vulnerability-country-picker vulnerability-country-picker-compact" for="vulnerability-stage-profile-result-select">
+        <span>Conversion Factor Optimization</span>
+        <select id="vulnerability-stage-profile-result-select" class="text-input">
+          ${buildVulnerabilityResultOptionsHtml(selectedResult)}
+        </select>
+      </label>
+      ${buildPlotDownloadButtonHtml("vulnerability-stage-profile-plot", "stage exposure profile", `stage-exposure-${vulnerabilityMetalId()}-${state.vulnerabilityCountry || "country"}`)}
+    </div>
+  `;
+}
+
+function buildVulnerabilityStageProfileHtml() {
+  const profile = state.vulnerabilityStageProfile;
+  const selectedYear = ensureVulnerabilityStageProfileYear();
+  if (profile.loading) {
+    return `
+      <section class="vulnerability-stage-profile">
+        <div class="vulnerability-stage-profile-head">
+          <div>
+            <strong>Stage Exposure Profile</strong>
+            <span>Loading the selected focal-country profile...</span>
+          </div>
+        </div>
+        <div class="order-empty">Preparing interactive stacked bars.</div>
+      </section>
+    `;
+  }
+  if (profile.error) {
+    return `
+      <section class="vulnerability-stage-profile">
+        <div class="vulnerability-stage-profile-head">
+          <div>
+            <strong>Stage Exposure Profile</strong>
+            <span>${escapeHtml(profile.error)}</span>
+          </div>
+        </div>
+        <div class="order-empty">No stage profile is available for the current selection.</div>
+      </section>
+    `;
+  }
+  if (!profile.data) {
+    return `
+      <section class="vulnerability-stage-profile">
+        <div class="vulnerability-stage-profile-head">
+          <div>
+            <strong>Stage Exposure Profile</strong>
+            <span>Choose a focal country to inspect its stage-level contribution profile.</span>
+          </div>
+        </div>
+      </section>
+    `;
+  }
+  return `
+    <section class="vulnerability-stage-profile">
+      <div class="vulnerability-stage-profile-head">
+        <div>
+          <strong>Stage Exposure Profile</strong>
+          <span>${escapeHtml(`${profile.data.country} | ${profile.data.pair} | ${profile.data.year} | ${resultModeLabel(profile.data.resultMode)}`)}</span>
+        </div>
+        ${buildVulnerabilityStageProfileControlsHtml()}
+      </div>
+      ${buildVulnerabilityStageProfileLegendHtml(profile.data)}
+      <div id="vulnerability-stage-profile-plot" class="vulnerability-stage-profile-plot" role="img" aria-label="Stage exposure profile"></div>
+    </section>
+  `;
+}
+
+function renderVulnerabilityStageProfile() {
+  const host = document.getElementById("vulnerability-stage-profile");
+  if (!host) {
+    return;
+  }
+  host.innerHTML = buildVulnerabilityStageProfileHtml();
+  bindVulnerabilityStageProfileControls();
+  bindPlotDownloadControls();
+  scheduleVulnerabilityStageProfilePlot();
+}
+
+function bindVulnerabilityStageProfileControls() {
+  const countrySelect = document.getElementById("vulnerability-country-select");
+  if (countrySelect) {
+    countrySelect.onchange = () => {
+      const previousCountry = state.vulnerabilityCountry;
+      state.vulnerabilityCountry = countrySelect.value;
+      state.vulnerabilityStageProfilePair = "";
+      state.vulnerabilityStageProfile.key = "";
+      state.vulnerabilityStageProfile.data = null;
+      state.vulnerabilityStageProfile.error = "";
+      if (!state.vulnerabilitySensitivity.draftCountry || state.vulnerabilitySensitivity.draftCountry === previousCountry) {
+        state.vulnerabilitySensitivity.draftCountry = state.vulnerabilityCountry;
+        state.vulnerabilitySensitivity.draftScenarioProduction = "";
+        state.vulnerabilitySensitivity.result = null;
+      }
+      renderVulnerabilityDashboard();
+    };
+  }
+  const pairSelect = document.getElementById("vulnerability-stage-profile-pair-select");
+  if (pairSelect) {
+    pairSelect.onchange = () => {
+      state.vulnerabilityStageProfilePair = pairSelect.value;
+      state.vulnerabilityStageProfile.key = "";
+      state.vulnerabilityStageProfile.data = null;
+      state.vulnerabilityStageProfile.error = "";
+      state.vulnerabilityStageProfile.loading = false;
+      if (!state.vulnerabilitySensitivity.selectedPair) {
+        state.vulnerabilitySensitivity.selectedPair = state.vulnerabilityStageProfilePair;
+      }
+      renderVulnerabilityStageProfile();
+      loadVulnerabilityStageProfile();
+    };
+  }
+  const resultSelect = document.getElementById("vulnerability-stage-profile-result-select");
+  if (resultSelect) {
+    resultSelect.onchange = () => {
+      state.vulnerabilityStageProfileResultMode = resultSelect.value;
+      state.vulnerabilityStageProfile.key = "";
+      state.vulnerabilityStageProfile.data = null;
+      state.vulnerabilityStageProfile.error = "";
+      state.vulnerabilityStageProfile.loading = false;
+      renderVulnerabilityStageProfile();
+      loadVulnerabilityStageProfile();
+    };
+  }
+  const yearSelect = document.getElementById("vulnerability-stage-profile-year-select");
+  if (yearSelect) {
+    yearSelect.onchange = () => {
+      const nextYear = Number(yearSelect.value);
+      if (!Number.isFinite(nextYear) || Number(nextYear) === Number(state.vulnerabilityStageProfileYear)) {
+        return;
+      }
+      state.vulnerabilityStageProfileYear = nextYear;
+      state.vulnerabilityStageProfilePair = "";
+      state.vulnerabilityStageProfile.key = "";
+      state.vulnerabilityStageProfile.data = null;
+      state.vulnerabilityStageProfile.error = "";
+      state.vulnerabilityStageProfile.loading = false;
+      renderVulnerabilityStageProfile();
+      loadVulnerabilityStageProfile();
+    };
+  }
+}
+
+async function loadVulnerabilityStageProfile() {
+  const profile = state.vulnerabilityStageProfile;
+  const key = vulnerabilityStageProfileKey();
+  if (!state.vulnerabilityCountry || profile.loading || (profile.key === key && (profile.data || profile.error))) {
+    return;
+  }
+  profile.key = key;
+  profile.loading = true;
+  profile.error = "";
+  profile.data = null;
+  renderVulnerabilityStageProfile();
+  try {
+    profile.data = await apiClient.requestVulnerabilityStageProfile(vulnerabilityStageProfileRequest());
+  } catch (error) {
+    profile.error = error?.message || "Stage profile request failed.";
+  } finally {
+    profile.loading = false;
+    renderVulnerabilityStageProfile();
+  }
+}
+
+function buildVulnerabilityTrendControlsHtml() {
+  ensureVulnerabilityPairSelections();
+  const compareOptions = comparisonCountryOptions();
+  return `
+    <div class="vulnerability-trend-section-head">
+      <div class="vulnerability-trend-title">
+        <strong>Time Trend</strong>
+        <span>Compare all Conversion Factor Optimization results by year for the shared Country VI scope.</span>
+      </div>
+      <div class="vulnerability-country-tools vulnerability-trend-country-tools">
+        <div class="vulnerability-compare-controls">
+          <label class="vulnerability-country-picker vulnerability-compare-picker" for="vulnerability-trend-compare-country-select">
+            <span>Add comparison</span>
+            <select id="vulnerability-trend-compare-country-select" class="text-input" ${compareOptions.length ? "" : "disabled"}>
+              ${compareOptions.map((country) => `<option value="${escapeHtml(country)}">${escapeHtml(country)}</option>`).join("")}
+            </select>
+          </label>
+          <button id="vulnerability-trend-add-country-btn" class="ghost-btn" type="button" ${compareOptions.length && state.vulnerabilityTrendCompareCountries.length < 3 ? "" : "disabled"}>Add</button>
+        </div>
+        <div id="vulnerability-country-chips" class="vulnerability-country-chips" aria-label="Compared countries">
+          ${buildVulnerabilityCountryChipsHtml()}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function buildVulnerabilityCountryTrendHtml() {
+  return `
+    <div class="vulnerability-country-vi-shell">
+      ${buildVulnerabilityCountryViControlsHtml()}
+      ${buildVulnerabilityCountryResultComparisonHtml()}
+      <div id="vulnerability-stage-profile" class="vulnerability-country-vi-panel">
+        ${buildVulnerabilityStageProfileHtml()}
+      </div>
+      ${buildVulnerabilityTimeTrendPanelHtml()}
+    </div>
+  `;
+}
+
+function buildVulnerabilityTimeTrendPanelHtml() {
+  const rows = trendRowsForSelectedCountry();
+  const stateMessage = state.vulnerabilityCountryVi.loading
+    ? `<div class="order-empty">Loading exact Country VI rows...</div>`
+    : state.vulnerabilityCountryVi.error
+      ? `<div class="order-empty">${escapeHtml(state.vulnerabilityCountryVi.error)}</div>`
+      : !rows.length
+        ? `<div class="order-empty">No country trend data are available for the current metal, material, and country selection.</div>`
+        : "";
+  return `
+    <section id="vulnerability-time-trend-panel" class="vulnerability-country-vi-panel vulnerability-trend-panel">
+      ${buildVulnerabilityTrendControlsHtml()}
+      ${buildVulnerabilityCombinedLegendHtml()}
+      ${stateMessage || `
+        <div class="vulnerability-trend-grid">
+          ${VULNERABILITY_TREND_CASES.map((caseConfig) => buildVulnerabilityTrendChartShellHtml(caseConfig)).join("")}
+        </div>
+      `}
+    </section>
+  `;
+}
+
+function buildVulnerabilityTrendPlotData(caseConfig, rows, years, countries) {
+  const visibleCountries = countries.filter((country) => vulnerabilityCountryVisible(country));
+  const highlightedYear = Number(state.vulnerabilityStageProfileYear || state.year);
+  return visibleCountries.flatMap((country) => {
+    const countryIndex = countries.indexOf(country);
+    const lineStyle = VULNERABILITY_COUNTRY_LINE_STYLES[countryIndex % VULNERABILITY_COUNTRY_LINE_STYLES.length];
+    return vulnerabilityResultChoices().map((series) => ({
+      type: "scatter",
+      mode: "lines+markers",
+      name: countries.length > 1 ? `${series.label} - ${country}` : series.label,
+      x: years,
+      y: years.map((year) => {
+        const row = rows.find(
+          (item) => item.country === country && Number(item.year) === Number(year) && item.resultMode === series.key,
+        );
+        return vulnerabilityTrendPercent(row, caseConfig.key);
+      }),
+      visible: vulnerabilitySeriesVisible(series.key),
+      connectgaps: false,
+      opacity: countryIndex === 0 ? 1 : 0.72,
+      line: {
+        color: series.color,
+        width: countryIndex === 0 ? 2.8 : 2.1,
+        shape: "linear",
+        dash: lineStyle.dash,
+      },
+      marker: {
+        color: series.color,
+        symbol: lineStyle.symbol,
+        size: years.map((year) => (Number(year) === highlightedYear ? (countryIndex === 0 ? 10 : 8) : 6.5)),
+        line: {
+          color: "rgba(255, 253, 248, 0.96)",
+          width: 1.4,
+        },
+      },
+      hovertemplate: `${escapeHtml(country)}<br>${escapeHtml(series.label)}<br>Year %{x}<br>${escapeHtml(caseConfig.label)}: %{y:.1f}%<extra></extra>`,
+    }));
+  });
+}
+
+function stageProfilePositions(profile) {
+  const visibleStages = (profile?.stages || ["Mining", "Processing", "Refining", "Cathode", "Total"]);
+  const cases = profile?.cases || [];
+  const positions = [];
+  cases.forEach((caseEntry, caseIndex) => {
+    visibleStages.forEach((stage, stageIndex) => {
+      positions.push({
+        caseKey: caseEntry.key,
+        caseLabel: caseEntry.label,
+        stage,
+        x: caseIndex * 6 + (stage === "Total" ? 4.65 : stageIndex),
+      });
+    });
+  });
+  return positions;
+}
+
+function buildVulnerabilityStageProfilePlotData(profile) {
+  if (!profile?.cases?.length) {
+    return [];
+  }
+  const tracesBySegment = new Map();
+  const stageList = (profile.stages || []).filter((stage) => stage !== "Total");
+  const ensureTrace = (segment) => {
+    if (!tracesBySegment.has(segment.id)) {
+      tracesBySegment.set(segment.id, {
+        type: "bar",
+        name: segment.label,
+        x: [],
+        y: [],
+        base: [],
+        width: [],
+        text: [],
+        customdata: [],
+        marker: {
+          color: segment.color,
+          line: { color: "rgba(42, 34, 28, 0.42)", width: 0.6 },
+        },
+        hovertemplate:
+          "%{customdata[0]}<br>%{customdata[1]}<br>%{customdata[2]} displayed: %{y:.1f}%<br>Computed path share: %{customdata[3]:.1f}%<extra></extra>",
+      });
+    }
+    return tracesBySegment.get(segment.id);
+  };
+
+  profile.cases.forEach((caseEntry, caseIndex) => {
+    stageList.forEach((stage, stageIndex) => {
+      const x = caseIndex * 6 + stageIndex;
+      let bottom = 0;
+      (profile.composition?.[stage] || []).forEach((segment) => {
+        const rawRatio = Number(segment.ratio) * 100;
+        if (!Number.isFinite(rawRatio) || rawRatio <= 0 || bottom >= 100) {
+          return;
+        }
+        const ratio = Math.max(0, Math.min(rawRatio, 100 - bottom));
+        if (ratio <= 0) {
+          return;
+        }
+        const trace = ensureTrace(segment);
+        trace.x.push(x);
+        trace.y.push(ratio);
+        trace.base.push(bottom);
+        trace.width.push(0.56);
+        trace.text.push(ratio >= 6 || segment.id === profile.countryId ? segment.abbr : "");
+        trace.customdata.push([caseEntry.label, stage, segment.label, rawRatio]);
+        bottom += ratio;
+      });
+    });
+  });
+
+  const focalTrace = {
+    type: "bar",
+    name: `Supply involving ${profile.countryAbbr || profile.country}`,
+    x: [],
+    y: [],
+    base: [],
+    width: [],
+    text: [],
+    customdata: [],
+    marker: {
+      color: "rgba(209, 47, 40, 0.32)",
+      line: { color: "rgba(209, 47, 40, 0.82)", width: 1.1 },
+    },
+    hovertemplate: "%{customdata[0]}<br>%{customdata[1]} exposure: %{y:.1f}%<extra></extra>",
+  };
+  profile.cases.forEach((caseEntry, caseIndex) => {
+    (profile.stages || []).forEach((stage, stageIndex) => {
+      const x = caseIndex * 6 + (stage === "Total" ? 4.65 : stageIndex);
+      const value = Number(caseEntry.stageRatios?.[stage]) * 100;
+      if (!Number.isFinite(value)) {
+        return;
+      }
+      focalTrace.x.push(x);
+      focalTrace.y.push(value);
+      focalTrace.base.push(0);
+      focalTrace.width.push(stage === "Total" ? 0.7 : 0.7);
+      focalTrace.text.push(value >= 12 || stage === "Total" ? `${value.toFixed(0)}%` : "");
+      focalTrace.customdata.push([caseEntry.label, stage]);
+    });
+  });
+
+  const traces = Array.from(tracesBySegment.values()).map((trace) => ({
+    ...trace,
+    textposition: "inside",
+    insidetextfont: { color: "rgba(32, 25, 21, 0.88)", size: 10 },
+    cliponaxis: false,
+  }));
+  traces.push({
+    ...focalTrace,
+    textposition: "inside",
+    insidetextfont: { color: "#7e241f", size: 10 },
+    cliponaxis: false,
+  });
+  return traces;
+}
+
+function buildVulnerabilityStageProfileLayout(profile, options = {}) {
+  const positions = stageProfilePositions(profile);
+  const caseAnnotations = (profile?.cases || []).map((caseEntry, index) => ({
+    x: index * 6 + 2.05,
+    y: 1.16,
+    xref: "x",
+    yref: "paper",
+    text: `<b>${escapeHtml(caseEntry.label)}</b>`,
+    showarrow: false,
+    font: { size: 12, color: "#2a211c" },
+  }));
+  const separators = (profile?.cases || []).slice(0, -1).map((_caseEntry, index) => ({
+    type: "line",
+    x0: index * 6 + 5.38,
+    x1: index * 6 + 5.38,
+    y0: 0,
+    y1: 100,
+    xref: "x",
+    yref: "y",
+    line: { color: "rgba(42, 34, 28, 0.32)", width: 1, dash: "dash" },
+  }));
+  return {
+    autosize: true,
+    height: options.height || 336,
+    margin: { l: 42, r: 12, t: 56, b: 48 },
+    paper_bgcolor: "rgba(0, 0, 0, 0)",
+    plot_bgcolor: "rgba(0, 0, 0, 0)",
+    barmode: "overlay",
+    bargap: 0.16,
+    hovermode: "closest",
+    dragmode: false,
+    showlegend: false,
+    font: {
+      family: "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+      color: "#6d6256",
+      size: 11,
+    },
+    xaxis: {
+      tickmode: "array",
+      tickvals: positions.map((item) => item.x),
+      ticktext: positions.map((item) => item.stage),
+      tickangle: -28,
+      showgrid: false,
+      zeroline: false,
+      fixedrange: true,
+      linecolor: "rgba(128, 111, 93, 0.28)",
+      linewidth: 1,
+    },
+    yaxis: {
+      range: [0, 105],
+      tickmode: "array",
+      tickvals: [0, 50, 100],
+      ticksuffix: "%",
+      gridcolor: "rgba(128, 111, 93, 0.18)",
+      zeroline: false,
+      fixedrange: true,
+    },
+    shapes: separators,
+    annotations: caseAnnotations,
+  };
+}
+
+function renderVulnerabilityStageProfilePlot() {
+  const profile = state.vulnerabilityStageProfile.data;
+  const host = document.getElementById("vulnerability-stage-profile-plot");
+  if (!host || host.offsetParent === null || typeof Plotly === "undefined" || !profile) {
+    return;
+  }
+  Plotly.react(
+    host,
+    buildVulnerabilityStageProfilePlotData(profile),
+    buildVulnerabilityStageProfileLayout(profile),
+    { ...PLOTLY_CONFIG, displayModeBar: false },
+  );
+}
+
+function scheduleVulnerabilityStageProfilePlot() {
+  if (vulnerabilityStageProfilePlotFrame) {
+    window.cancelAnimationFrame(vulnerabilityStageProfilePlotFrame);
+  }
+  vulnerabilityStageProfilePlotFrame = window.requestAnimationFrame(() => {
+    vulnerabilityStageProfilePlotFrame = window.requestAnimationFrame(() => {
+      vulnerabilityStageProfilePlotFrame = 0;
+      renderVulnerabilityStageProfilePlot();
+    });
+  });
+}
+
+function buildSensitivityStageProfileHtml(countryResult) {
+  const profile = countryResult?.stageProfile;
+  if (!profile) {
+    return "";
+  }
+  return `
+    <section class="vulnerability-stage-profile vulnerability-sensitivity-stage-profile">
+      <div class="vulnerability-stage-profile-head">
+        <div>
+          <strong>Recalculated Stage Exposure Profile</strong>
+          <span>${escapeHtml(`${profile.country} | ${profile.pair} | ${profile.year} | ${resultModeLabel(profile.resultMode)}`)}</span>
+        </div>
+        <div class="vulnerability-stage-profile-actions">
+          <span class="vulnerability-stage-profile-note">Scenario graph after the active production edits.</span>
+          ${buildPlotDownloadButtonHtml("vulnerability-sensitivity-stage-profile-plot", "recalculated stage exposure profile", `recalculated-stage-exposure-${profile.metal || sensitivityMetalId()}-${profile.country || "country"}`)}
+        </div>
+      </div>
+      ${buildVulnerabilityStageProfileLegendHtml(profile)}
+      <div id="vulnerability-sensitivity-stage-profile-plot" class="vulnerability-stage-profile-plot" role="img" aria-label="Recalculated stage exposure profile"></div>
+    </section>
+  `;
+}
+
+function renderVulnerabilitySensitivityStageProfilePlot() {
+  const result = state.vulnerabilitySensitivity.result;
+  const countryResult = sensitivityResultCountry(result);
+  const profile = countryResult?.stageProfile;
+  const host = document.getElementById("vulnerability-sensitivity-stage-profile-plot");
+  if (!host || host.offsetParent === null || typeof Plotly === "undefined" || !profile) {
+    return;
+  }
+  Plotly.react(
+    host,
+    buildVulnerabilityStageProfilePlotData(profile),
+    buildVulnerabilityStageProfileLayout(profile, { height: 300 }),
+    { ...PLOTLY_CONFIG, displayModeBar: false },
+  );
+}
+
+function scheduleVulnerabilitySensitivityStageProfilePlot() {
+  if (vulnerabilitySensitivityStageProfilePlotFrame) {
+    window.cancelAnimationFrame(vulnerabilitySensitivityStageProfilePlotFrame);
+  }
+  vulnerabilitySensitivityStageProfilePlotFrame = window.requestAnimationFrame(() => {
+    vulnerabilitySensitivityStageProfilePlotFrame = window.requestAnimationFrame(() => {
+      vulnerabilitySensitivityStageProfilePlotFrame = 0;
+      renderVulnerabilitySensitivityStageProfilePlot();
+    });
+  });
+}
+
+function plotDownloadFilename(rawName) {
+  return String(rawName || "plot")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    || "plot";
+}
+
+async function downloadPlotImage(plotId, filename) {
+  const host = document.getElementById(plotId);
+  if (!host || typeof Plotly === "undefined") {
+    return;
+  }
+  const width = Math.max(900, Math.round(host.getBoundingClientRect().width || host.offsetWidth || 900));
+  const height = Math.max(520, Math.round(host.getBoundingClientRect().height || host.offsetHeight || 520));
+  await Plotly.downloadImage(host, {
+    format: "png",
+    filename: plotDownloadFilename(filename),
+    width,
+    height,
+    scale: 2,
+  });
+}
+
+function bindPlotDownloadControls() {
+  document.querySelectorAll("[data-download-plot]").forEach((button) => {
+    button.onclick = () => {
+      const plotId = button.dataset.downloadPlot;
+      const filename = button.dataset.downloadFilename || plotId;
+      downloadPlotImage(plotId, filename);
+    };
+  });
+}
+
+function buildVulnerabilityTrendLayout(caseConfig, years) {
+  const minYear = Math.min(...years);
+  const maxYear = Math.max(...years);
+  return {
+    autosize: true,
+    height: 236,
+    margin: { l: 42, r: 14, t: 6, b: 34 },
+    paper_bgcolor: "rgba(0, 0, 0, 0)",
+    plot_bgcolor: "rgba(0, 0, 0, 0)",
+    showlegend: false,
+    hovermode: "closest",
+    dragmode: false,
+    font: {
+      family: "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+      color: "#6d6256",
+      size: 12,
+    },
+    xaxis: {
+      range: [minYear - 0.15, maxYear + 0.15],
+      tickmode: "array",
+      tickvals: years,
+      tickfont: { color: "#5e5247", size: 12 },
+      showgrid: false,
+      zeroline: false,
+      fixedrange: true,
+      linecolor: "rgba(128, 111, 93, 0.3)",
+      linewidth: 1,
+    },
+    yaxis: {
+      range: [0, 100],
+      tickmode: "array",
+      tickvals: [0, 50, 100],
+      ticksuffix: "%",
+      tickfont: { color: "#6d6256", size: 12 },
+      gridcolor: "rgba(128, 111, 93, 0.18)",
+      zeroline: false,
+      fixedrange: true,
+    },
+    meta: { caseKey: caseConfig.key },
+  };
+}
+
+function renderVulnerabilityTrendPlots() {
+  const trendHost = document.getElementById("vulnerability-trend-charts");
+  if (!trendHost || trendHost.offsetParent === null || typeof Plotly === "undefined") {
+    return;
+  }
+  const rows = trendRowsForSelectedCountry();
+  const years = vulnerabilityTrendYears(rows);
+  const countries = vulnerabilityTrendCountries();
+  if (!rows.length || !years.length) {
+    return;
+  }
+  VULNERABILITY_TREND_CASES.forEach((caseConfig) => {
+    const plotHost = document.getElementById(`vulnerability-plot-${caseConfig.key}`);
+    if (!plotHost) {
+      return;
+    }
+    Plotly.react(
+      plotHost,
+      buildVulnerabilityTrendPlotData(caseConfig, rows, years, countries),
+      buildVulnerabilityTrendLayout(caseConfig, years),
+      { ...PLOTLY_CONFIG, displayModeBar: false },
+    );
+  });
+}
+
+function scheduleVulnerabilityTrendPlots() {
+  if (vulnerabilityTrendPlotFrame) {
+    window.cancelAnimationFrame(vulnerabilityTrendPlotFrame);
+  }
+  vulnerabilityTrendPlotFrame = window.requestAnimationFrame(() => {
+    vulnerabilityTrendPlotFrame = window.requestAnimationFrame(() => {
+      vulnerabilityTrendPlotFrame = 0;
+      renderVulnerabilityTrendPlots();
+    });
+  });
+}
+
+function bindVulnerabilityTrendLegendControls() {
+  document.querySelectorAll("[data-vulnerability-series]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const seriesKey = button.dataset.vulnerabilitySeries;
+      if (!seriesKey) {
+        return;
+      }
+      state.vulnerabilityTrendVisible[seriesKey] = !vulnerabilitySeriesVisible(seriesKey);
+      renderVulnerabilityTimeTrendPanel();
+    });
+  });
+}
+
+function buildVulnerabilityCountryChipsHtml() {
+  const countries = vulnerabilityTrendCountries();
+  if (countries.length <= 1) {
+    return `<span class="vulnerability-country-chip vulnerability-country-chip-muted">Single country view</span>`;
+  }
+  return countries
+    .map((country, index) => {
+      const isPrimary = index === 0;
+      return `
+        <span class="vulnerability-country-chip ${isPrimary ? "is-primary" : ""}">
+          ${escapeHtml(isPrimary ? `${country} - focal` : country)}
+          ${isPrimary ? "" : `<button type="button" data-vulnerability-remove-country="${escapeHtml(country)}" aria-label="Remove ${escapeHtml(country)}">x</button>`}
+        </span>
+      `;
+    })
+    .join("");
+}
+
+function buildVulnerabilityRankingHtml() {
+  const rows = currentVulnerabilityScopeRows(VULNERABILITY_DASHBOARD_DATA.countryRows);
+  if (!rows.length) {
+    return `<div class="order-empty">No country-level vulnerability ranking rows are available for the current selection.</div>`;
+  }
+  return `
+    <table class="data-table vulnerability-table">
+      <thead>
+        <tr>
+          <th>Rank</th>
+          <th>Country</th>
+          <th>Pair</th>
+          <th>Base VI</th>
+          <th>Minimum</th>
+          <th>Maximum A</th>
+          <th>Maximum B</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows
+          .map(
+            (row, index) => `
+              <tr>
+                <th>${index + 1}</th>
+                <td>
+                  <strong>${escapeHtml(row.country)}</strong>
+                  <div class="vulnerability-table-bar" aria-hidden="true"><span style="width: ${escapeHtml(vulnerabilityPercentWidth(row.proportional))}"></span></div>
+                </td>
+                <td>${escapeHtml(row.materialPair)}</td>
+                <td>${escapeHtml(formatVulnerabilityPercent(row.proportional))}</td>
+                <td>${escapeHtml(formatVulnerabilityPercent(row.minimum))}</td>
+                <td>${escapeHtml(formatVulnerabilityPercent(row.maximumKnown))}</td>
+                <td>${escapeHtml(formatVulnerabilityPercent(row.maximumWithUnknown))}</td>
+              </tr>
+            `,
+          )
+          .join("")}
+      </tbody>
+    </table>
+  `;
+}
+
+function buildVulnerabilityDeltaHtml() {
+  if (state.resultMode === "baseline") {
+    return `<div class="order-empty">Choose an optimization result to compare vulnerability against Original.</div>`;
+  }
+  const rows = currentVulnerabilityScopeRows(VULNERABILITY_DASHBOARD_DATA.topDeltas);
+  if (rows.length) {
+    return `
+      <table class="data-table vulnerability-table">
+        <thead>
+          <tr>
+            <th>Country</th>
+            <th>Pair</th>
+            <th>Original</th>
+            <th>${escapeHtml(resultModeLabel(state.resultMode))}</th>
+            <th>Delta</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows
+            .map(
+              (row) => `
+                <tr>
+                  <th>${escapeHtml(row.country)}</th>
+                  <td>${escapeHtml(row.materialPair)}</td>
+                  <td>${escapeHtml(formatVulnerabilityPercent(row.baseline))}</td>
+                  <td>${escapeHtml(formatVulnerabilityPercent(row.scenario))}</td>
+                  <td>${buildVulnerabilityDeltaBadge(row.delta)}</td>
+                </tr>
+              `,
+            )
+            .join("")}
+        </tbody>
+      </table>
+    `;
+  }
+  const summary = VULNERABILITY_DASHBOARD_DATA.baselineDeltas.find((row) => row.resultMode === state.resultMode);
+  if (!summary) {
+    return `<div class="order-empty">No baseline-delta summary is available for the selected result.</div>`;
+  }
+  return `
+    <div class="diagnostic-fact-grid diagnostic-fact-grid-compact">
+      ${[
+        { label: "Mean Base Delta", value: summary.meanDeltaProportional, note: "Selected result minus Original." },
+        { label: "Mean Absolute Base Delta", value: summary.meanAbsDeltaProportional, note: "Average movement regardless of direction." },
+        { label: "Largest Base Delta", value: summary.maxAbsDeltaProportional, note: "Largest country-material change in the release." },
+        { label: "Maximum B Mean Absolute Delta", value: summary.meanAbsDeltaMaximumWithUnknown, note: "Upper-bound movement under uncertainty." },
+      ]
+        .map(
+          (item) => `
+            <article class="diagnostic-fact">
+              <span>${escapeHtml(item.label)}</span>
+              <strong>${escapeHtml(formatVulnerabilityPercent(item.value))}</strong>
+              <small>${escapeHtml(item.note)}</small>
+            </article>
+          `,
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function vulnerabilityResultChoices() {
+  const allowedModes = state.resultModes.length
+    ? state.resultModes
+    : VULNERABILITY_RESULT_SERIES.map((series) => series.key);
+  return VULNERABILITY_RESULT_SERIES.filter((series) => allowedModes.includes(series.key));
+}
+
+function defaultVulnerabilityResultMode() {
+  const choices = vulnerabilityResultChoices().map((series) => series.key);
+  if (choices.includes(state.resultMode)) {
+    return state.resultMode;
+  }
+  return choices.includes("baseline") ? "baseline" : choices[0] || "baseline";
+}
+
+function ensureVulnerabilityResultScopes() {
+  const choices = vulnerabilityResultChoices().map((series) => series.key);
+  const fallback = defaultVulnerabilityResultMode();
+  if (!choices.includes(state.vulnerabilityStageProfileResultMode)) {
+    state.vulnerabilityStageProfileResultMode = fallback;
+  }
+}
+
+function vulnerabilityStageProfileResultMode() {
+  ensureVulnerabilityResultScopes();
+  return state.vulnerabilityStageProfileResultMode;
+}
+
+function buildVulnerabilityResultOptionsHtml(selectedResult) {
+  return vulnerabilityResultChoices()
+    .map((series) => `<option value="${escapeHtml(series.key)}" ${series.key === selectedResult ? "selected" : ""}>${escapeHtml(resultModeLabel(series.key))}</option>`)
+    .join("");
+}
+
+function unusedLegacyBuildVulnerabilitySensitivityOutputHtml() {
+  return "";
+  /*
+    <div class="vulnerability-sensitivity-summary">
+      <article>
+        <span>Local sensitivity preview</span>
+        <strong>${escapeHtml(sensitivity.country)} · ${escapeHtml(step.label)}</strong>
+        <small>${escapeHtml(`${state.metal} ${state.year}, ${resultModeLabel(sensitivity.resultMode)}`)}</small>
+      </article>
+      <article>
+        <span>Base VI movement</span>
+        <strong>${escapeHtml(formatVulnerabilityPercent(baseEntry.current))} → ${escapeHtml(formatVulnerabilityPercent(baseEntry.scenario))}</strong>
+        <small>${buildVulnerabilityDeltaBadge(baseEntry.delta)}</small>
+      </article>
+      <article>
+        <span>Stage response weight</span>
+        <strong>${escapeHtml(`${(step.weight * 100).toFixed(0)}%`)}</strong>
+        <small>Used for fast local reweighting.</small>
+      </article>
+    </div>
+    <div class="vulnerability-sensitivity-case-grid">
+      ${entries
+        .map(
+          (entry) => `
+            <article class="vulnerability-sensitivity-case">
+              <div class="vulnerability-sensitivity-case-head">
+                <span>${escapeHtml(entry.eyebrow)}</span>
+                <strong>${escapeHtml(entry.label)}</strong>
+                ${buildVulnerabilityDeltaBadge(entry.delta)}
+              </div>
+              <div class="vulnerability-sensitivity-bars">
+                <div class="vulnerability-sensitivity-bar-row">
+                  <span>Current</span>
+                  <div class="vulnerability-bar" aria-hidden="true"><span style="width: ${escapeHtml(vulnerabilityPercentWidth(entry.current))}"></span></div>
+                  <strong>${escapeHtml(formatVulnerabilityPercent(entry.current))}</strong>
+                </div>
+                <div class="vulnerability-sensitivity-bar-row">
+                  <span>Scenario</span>
+                  <div class="vulnerability-bar vulnerability-sensitivity-bar" aria-hidden="true"><span style="width: ${escapeHtml(vulnerabilityPercentWidth(entry.scenario))}"></span></div>
+                  <strong>${escapeHtml(formatVulnerabilityPercent(entry.scenario))}</strong>
+                </div>
+              </div>
+            </article>
+          `,
+        )
+        .join("")}
+    </div>
+  `;
+  */
+}
+
+function buildVulnerabilityMethodNoteHtml() {
+  return `
+    <div class="vulnerability-method-list">
+      ${VULNERABILITY_DASHBOARD_DATA.methodNotes
+        .map((note) => `<p>${escapeHtml(note)}</p>`)
+        .join("")}
+    </div>
+  `;
+}
+
+function renderVulnerabilityCountryTrend() {
+  const trendHost = document.getElementById("vulnerability-trend-charts");
+  if (trendHost) {
+    trendHost.innerHTML = buildVulnerabilityCountryTrendHtml();
+    renderVulnerabilityCountryLineLegend();
+    bindVulnerabilityCountryControls();
+    bindVulnerabilityCountryLineLegendControls();
+    renderVulnerabilityStageProfile();
+    bindVulnerabilityTrendLegendControls();
+    bindPlotDownloadControls();
+    scheduleVulnerabilityTrendPlots();
+    loadVulnerabilityCountryViData();
+    loadVulnerabilityStageProfile();
+  }
+}
+
+function renderVulnerabilityTimeTrendPanel() {
+  const panel = document.getElementById("vulnerability-time-trend-panel");
+  if (!panel) {
+    renderVulnerabilityCountryTrend();
+    return;
+  }
+  panel.outerHTML = buildVulnerabilityTimeTrendPanelHtml();
+  renderVulnerabilityCountryLineLegend();
+  bindVulnerabilityCountryControls();
+  bindVulnerabilityCountryLineLegendControls();
+  bindVulnerabilityTrendLegendControls();
+  bindPlotDownloadControls();
+  scheduleVulnerabilityTrendPlots();
+  loadVulnerabilityCountryViData({ trendOnly: true });
+}
+
+async function loadVulnerabilityCountryViData({ trendOnly = false } = {}) {
+  const payload = state.vulnerabilityCountryVi;
+  const countries = vulnerabilityTrendCountries();
+  const key = vulnerabilityCountryViKey();
+  if (!countries.length || payload.loading || (payload.key === key && (payload.data || payload.error))) {
+    return;
+  }
+  payload.key = key;
+  payload.loading = true;
+  payload.error = "";
+  payload.data = null;
+  if (trendOnly) {
+    renderVulnerabilityTimeTrendPanel();
+  } else {
+    renderVulnerabilityCountryTrend();
+  }
+  try {
+    const settledResponses = await Promise.allSettled(
+      countries.map((country) => apiClient.requestVulnerabilityCountryVi({
+        metal: vulnerabilityMetalId(),
+        year: ensureVulnerabilityStageProfileYear(),
+        resultMode: state.resultMode,
+        cobaltMode: state.cobaltMode,
+        country,
+        pair: state.vulnerabilityStageProfilePair,
+        accessMode: state.accessMode,
+        accessPassword: state.accessPassword,
+      })),
+    );
+    const responses = settledResponses
+      .filter((entry) => entry.status === "fulfilled")
+      .map((entry) => entry.value);
+    if (!responses.length) {
+      const firstError = settledResponses.find((entry) => entry.status === "rejected")?.reason;
+      throw firstError || new Error("Country VI request failed.");
+    }
+    payload.data = {
+      countries: responses,
+      pairOptions: responses[0]?.pairOptions || [],
+      rows: responses.flatMap((response) => response?.rows || []),
+    };
+  } catch (error) {
+    payload.error = error?.message || "Country VI request failed.";
+  } finally {
+    payload.loading = false;
+    if (trendOnly) {
+      renderVulnerabilityTimeTrendPanel();
+    } else {
+      renderVulnerabilityCountryTrend();
+    }
+  }
+}
+
+function renderVulnerabilitySensitivityPanel() {
+  const host = document.getElementById("vulnerability-sensitivity-panel");
+  if (!host) {
+    return;
+  }
+  const sensitivity = ensureVulnerabilitySensitivity();
+  host.innerHTML = buildVulnerabilitySensitivityPanelHtml();
+  bindVulnerabilitySensitivityControls();
+  bindPlotDownloadControls();
+  scheduleVulnerabilitySensitivityStageProfilePlot();
+  if (
+    state.accessMode === "analyst"
+    && state.accessUnlocked
+    && !sensitivity.options
+    && !sensitivity.optionsLoading
+    && !sensitivity.optionsError
+  ) {
+    loadVulnerabilitySensitivityOptions();
+  }
+}
+
+function bindVulnerabilityCountryControls() {
+  const countrySelect = document.getElementById("vulnerability-country-vi-country-select");
+  if (countrySelect) {
+    countrySelect.onchange = () => {
+      const previousCountry = state.vulnerabilityCountry;
+      state.vulnerabilityCountry = countrySelect.value;
+      state.vulnerabilityTrendCountry = state.vulnerabilityCountry;
+      state.vulnerabilityStageProfilePair = "";
+      state.vulnerabilityTrendPair = "";
+      state.vulnerabilityTrendCompareCountries = state.vulnerabilityTrendCompareCountries.filter(
+        (country) => country !== state.vulnerabilityCountry,
+      );
+      state.vulnerabilityCompareCountries = state.vulnerabilityTrendCompareCountries;
+      state.vulnerabilityCountryVi.key = "";
+      state.vulnerabilityCountryVi.data = null;
+      state.vulnerabilityCountryVi.error = "";
+      state.vulnerabilityStageProfile.key = "";
+      state.vulnerabilityStageProfile.data = null;
+      state.vulnerabilityStageProfile.error = "";
+      state.vulnerabilityStageProfile.loading = false;
+      if (!state.vulnerabilitySensitivity.draftCountry || state.vulnerabilitySensitivity.draftCountry === previousCountry) {
+        state.vulnerabilitySensitivity.draftCountry = state.vulnerabilityCountry;
+        state.vulnerabilitySensitivity.draftScenarioProduction = "";
+        state.vulnerabilitySensitivity.result = null;
+      }
+      renderVulnerabilityDashboard();
+    };
+  }
+
+  const metalSelect = document.getElementById("vulnerability-country-vi-metal-select");
+  if (metalSelect) {
+    metalSelect.onchange = () => {
+      state.vulnerabilityMetal = metalSelect.value;
+      state.vulnerabilityCountry = "";
+      state.vulnerabilityMaterial = "";
+      state.vulnerabilityStageProfilePair = "";
+      state.vulnerabilityTrendPair = "";
+      state.vulnerabilityTrendCompareCountries = [];
+      state.vulnerabilityCompareCountries = [];
+      state.vulnerabilityCountryVisible = {};
+      state.vulnerabilityCountryVi.key = "";
+      state.vulnerabilityCountryVi.data = null;
+      state.vulnerabilityCountryVi.error = "";
+      state.vulnerabilityStageProfile.key = "";
+      state.vulnerabilityStageProfile.data = null;
+      state.vulnerabilityStageProfile.error = "";
+      state.vulnerabilityStageProfile.loading = false;
+      state.vulnerabilitySensitivity.selectedMetal = state.vulnerabilityMetal;
+      state.vulnerabilitySensitivity.selectedMaterial = "";
+      state.vulnerabilitySensitivity.selectedPair = "";
+      state.vulnerabilitySensitivity.options = null;
+      state.vulnerabilitySensitivity.optionsKey = "";
+      state.vulnerabilitySensitivity.result = null;
+      syncStateToUrl(state);
+      renderVulnerabilityDashboard();
+    };
+  }
+
+  const materialSelect = document.getElementById("vulnerability-country-vi-material-select");
+  if (materialSelect) {
+    materialSelect.onchange = () => {
+      state.vulnerabilityMaterial = materialSelect.value;
+      state.vulnerabilityStageProfilePair = vulnerabilityPairForMaterial(state.vulnerabilityMaterial);
+      state.vulnerabilityTrendPair = state.vulnerabilityStageProfilePair;
+      state.vulnerabilityCountryVi.key = "";
+      state.vulnerabilityCountryVi.data = null;
+      state.vulnerabilityCountryVi.error = "";
+      state.vulnerabilityStageProfile.key = "";
+      state.vulnerabilityStageProfile.data = null;
+      state.vulnerabilityStageProfile.error = "";
+      state.vulnerabilityStageProfile.loading = false;
+      if (!state.vulnerabilitySensitivity.selectedPair) {
+        state.vulnerabilitySensitivity.selectedPair = state.vulnerabilityStageProfilePair;
+      }
+      renderVulnerabilityDashboard();
+    };
+  }
+
+  const yearSelect = document.getElementById("vulnerability-country-vi-year-select");
+  if (yearSelect) {
+    yearSelect.onchange = () => {
+      const nextYear = Number(yearSelect.value);
+      if (!Number.isFinite(nextYear) || nextYear === Number(state.vulnerabilityStageProfileYear)) {
+        return;
+      }
+      state.vulnerabilityStageProfileYear = nextYear;
+      state.vulnerabilityStageProfile.key = "";
+      state.vulnerabilityStageProfile.data = null;
+      state.vulnerabilityStageProfile.error = "";
+      state.vulnerabilityStageProfile.loading = false;
+      renderVulnerabilityDashboard();
+    };
+  }
+
+  const compareSelect = document.getElementById("vulnerability-trend-compare-country-select");
+  const addButton = document.getElementById("vulnerability-trend-add-country-btn");
+  if (addButton && compareSelect) {
+    addButton.onclick = () => {
+      const nextCountry = compareSelect.value;
+      if (
+        nextCountry
+        && nextCountry !== state.vulnerabilityTrendCountry
+        && !state.vulnerabilityTrendCompareCountries.includes(nextCountry)
+        && state.vulnerabilityTrendCompareCountries.length < 3
+      ) {
+        state.vulnerabilityTrendCompareCountries = [...state.vulnerabilityTrendCompareCountries, nextCountry];
+        state.vulnerabilityCompareCountries = state.vulnerabilityTrendCompareCountries;
+        state.vulnerabilityCountryVi.key = "";
+        state.vulnerabilityCountryVi.data = null;
+        state.vulnerabilityCountryVi.error = "";
+        renderVulnerabilityTimeTrendPanel();
+      }
+    };
+  }
+
+  document.querySelectorAll("[data-vulnerability-remove-country]").forEach((button) => {
+    button.onclick = () => {
+      const country = button.dataset.vulnerabilityRemoveCountry;
+      state.vulnerabilityTrendCompareCountries = state.vulnerabilityTrendCompareCountries.filter((entry) => entry !== country);
+      state.vulnerabilityCompareCountries = state.vulnerabilityTrendCompareCountries;
+      state.vulnerabilityCountryVi.key = "";
+      state.vulnerabilityCountryVi.data = null;
+      state.vulnerabilityCountryVi.error = "";
+      renderVulnerabilityTimeTrendPanel();
+    };
+  });
+}
+
+function vulnerabilitySensitivityRuntimeKey(resultMode = state.vulnerabilitySensitivity.resultMode) {
+  const sensitivity = state.vulnerabilitySensitivity;
+  return [sensitivity.selectedMetal || vulnerabilityMetalId(), state.year, state.cobaltMode, resultMode].join("|");
+}
+
+function vulnerabilitySensitivityStep(stepKey) {
+  return VULNERABILITY_SENSITIVITY_STEPS.find((entry) => entry.key === stepKey)
+    || VULNERABILITY_SENSITIVITY_STEPS[2];
+}
+
+function roundSensitivityProduction(value) {
+  const numeric = asNumber(value);
+  if (!Number.isFinite(numeric)) {
+    return 0;
+  }
+  return Math.round(numeric * 10) / 10;
+}
+
+function formatSensitivityProduction(value) {
+  const numeric = asNumber(value);
+  if (!Number.isFinite(numeric)) {
+    return "-";
+  }
+  return numeric.toLocaleString(undefined, { maximumFractionDigits: 1 });
+}
+
+function formatSensitivityProductionDelta(current, scenario) {
+  const base = asNumber(current);
+  const next = asNumber(scenario);
+  if (!Number.isFinite(base) || base <= 0 || !Number.isFinite(next)) {
+    return "-";
+  }
+  const pct = ((next - base) / base) * 100;
+  return `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%`;
+}
+
+function sensitivityOptionsCountries() {
+  return state.vulnerabilitySensitivity.options?.countries || [];
+}
+
+function sensitivityMetalId() {
+  const sensitivity = state.vulnerabilitySensitivity;
+  const allowed = (state.metals || []).map((metal) => metal.id || metal).filter(Boolean);
+  if (!sensitivity.selectedMetal || (allowed.length && !allowed.includes(sensitivity.selectedMetal))) {
+    sensitivity.selectedMetal = allowed.includes(vulnerabilityMetalId()) ? vulnerabilityMetalId() : allowed[0] || state.metal;
+  }
+  return sensitivity.selectedMetal;
+}
+
+function sensitivityMaterialOptions() {
+  const pairs = state.vulnerabilitySensitivity.options?.pairs || [];
+  const materials = pairs
+    .map((entry) => entry.chemistry || parseVulnerabilityPair(entry.pair).material)
+    .filter(Boolean);
+  if (materials.includes("NMC") && materials.includes("NCA")) {
+    materials.push("NCX");
+  }
+  return sortVulnerabilityMaterials(materials);
+}
+
+function sensitivityCountryOption(country) {
+  return sensitivityOptionsCountries().find((entry) => entry.country === country) || null;
+}
+
+function sensitivityProductionValue(country, step) {
+  const option = sensitivityCountryOption(country);
+  const value = option?.steps?.[step];
+  return Number.isFinite(asNumber(value)) ? asNumber(value) : 0;
+}
+
+function normalizeSensitivityEdit(edit) {
+  const step = vulnerabilitySensitivityStep(edit.step).key;
+  const country = edit.country || state.vulnerabilitySensitivity.draftCountry;
+  const current = sensitivityProductionValue(country, step);
+  const scenario = Number.isFinite(asNumber(edit.scenarioProduction))
+    ? Math.max(0, roundSensitivityProduction(edit.scenarioProduction))
+    : roundSensitivityProduction(current);
+  return {
+    country,
+    step,
+    scenarioProduction: scenario,
+  };
+}
+
+function ensureVulnerabilitySensitivity() {
+  const sensitivity = state.vulnerabilitySensitivity;
+  sensitivityMetalId();
+  const resultChoices = vulnerabilityResultChoices();
+  const validResults = resultChoices.map((series) => series.key);
+  const validSteps = VULNERABILITY_SENSITIVITY_STEPS.map((step) => step.key);
+  if (!validResults.includes(sensitivity.resultMode)) {
+    sensitivity.resultMode = validResults.includes(state.resultMode)
+      ? state.resultMode
+      : validResults[0] || "baseline";
+  }
+  if (!validSteps.includes(sensitivity.draftStep)) {
+    sensitivity.draftStep = "refining";
+  }
+  const runtimeKey = vulnerabilitySensitivityRuntimeKey();
+  if (sensitivity.optionsKey && sensitivity.optionsKey !== runtimeKey) {
+    sensitivity.options = null;
+    sensitivity.optionsKey = "";
+    sensitivity.optionsError = "";
+    sensitivity.result = null;
+    sensitivity.resultError = "";
+  }
+  const countryOptions = sensitivityOptionsCountries().map((entry) => entry.country);
+  const materialOptions = sensitivityMaterialOptions();
+  if (materialOptions.length && !materialOptions.includes(sensitivity.selectedMaterial)) {
+    const preferredMaterial = [
+      state.vulnerabilityMaterial,
+      parseVulnerabilityPair(state.vulnerabilityStageProfilePair).material,
+      parseVulnerabilityPair(state.vulnerabilityTrendPair).material,
+    ].find((material) => materialOptions.includes(material));
+    sensitivity.selectedMaterial = preferredMaterial || materialOptions[0];
+  }
+  const selectedPair = vulnerabilityPairForMaterial(sensitivity.selectedMaterial, sensitivity.selectedMetal);
+  if (selectedPair && sensitivity.selectedPair !== selectedPair) {
+    sensitivity.selectedPair = selectedPair;
+    sensitivity.result = null;
+  }
+  if (countryOptions.length) {
+    if (!countryOptions.includes(sensitivity.draftCountry)) {
+      sensitivity.draftCountry = countryOptions.includes(state.vulnerabilityCountry)
+        ? state.vulnerabilityCountry
+        : countryOptions[0];
+    }
+    sensitivity.edits = sensitivity.edits
+      .filter((edit) => countryOptions.includes(edit.country) && validSteps.includes(edit.step))
+      .map(normalizeSensitivityEdit);
+    const draftCurrent = sensitivityProductionValue(sensitivity.draftCountry, sensitivity.draftStep);
+    if (!Number.isFinite(asNumber(sensitivity.draftScenarioProduction)) || sensitivity.draftScenarioProduction === "") {
+      sensitivity.draftScenarioProduction = roundSensitivityProduction(draftCurrent);
+    }
+  } else if (!sensitivity.draftCountry) {
+    sensitivity.draftCountry = state.vulnerabilityCountry || "";
+  }
+  return sensitivity;
+}
+
+function vulnerabilitySensitivityRequestBase() {
+  const sensitivity = ensureVulnerabilitySensitivity();
+  return {
+    metal: sensitivity.selectedMetal || vulnerabilityMetalId(),
+    year: state.year,
+    resultMode: sensitivity.resultMode,
+    cobaltMode: state.cobaltMode,
+    accessMode: state.accessMode,
+    accessPassword: state.accessPassword,
+  };
+}
+
+async function loadVulnerabilitySensitivityOptions(options = {}) {
+  const sensitivity = ensureVulnerabilitySensitivity();
+  if (state.accessMode !== "analyst" || !state.accessUnlocked || sensitivity.optionsLoading) {
+    return;
+  }
+  const runtimeKey = vulnerabilitySensitivityRuntimeKey();
+  if (!options.force && sensitivity.options && sensitivity.optionsKey === runtimeKey) {
+    return;
+  }
+  sensitivity.optionsLoading = true;
+  sensitivity.optionsError = "";
+  renderVulnerabilitySensitivityPanel();
+  try {
+    const payload = await apiClient.requestVulnerabilitySensitivityOptions(vulnerabilitySensitivityRequestBase());
+    sensitivity.options = payload;
+    sensitivity.optionsKey = runtimeKey;
+    sensitivity.optionsError = "";
+    const countries = (payload.countries || []).map((entry) => entry.country);
+    if (countries.length && !countries.includes(sensitivity.draftCountry)) {
+      sensitivity.draftCountry = countries.includes(state.vulnerabilityCountry)
+        ? state.vulnerabilityCountry
+        : countries[0];
+    }
+    sensitivity.draftScenarioProduction = "";
+    ensureVulnerabilitySensitivity();
+  } catch (error) {
+    sensitivity.options = null;
+    sensitivity.optionsKey = "";
+    sensitivity.optionsError = error.message || "Failed to load production options.";
+  } finally {
+    sensitivity.optionsLoading = false;
+    renderVulnerabilitySensitivityPanel();
+  }
+}
+
+function buildSensitivityCountryOptionsHtml(selectedCountry) {
+  return sensitivityOptionsCountries()
+    .map((entry) => `<option value="${escapeHtml(entry.country)}" ${entry.country === selectedCountry ? "selected" : ""}>${escapeHtml(entry.country)}</option>`)
+    .join("");
+}
+
+function buildSensitivityStepOptionsHtml(selectedStep) {
+  return VULNERABILITY_SENSITIVITY_STEPS
+    .map((entry) => `<option value="${escapeHtml(entry.key)}" ${entry.key === selectedStep ? "selected" : ""}>${escapeHtml(entry.label)}</option>`)
+    .join("");
+}
+
+function buildSensitivityResultOptionsHtml(selectedResult) {
+  return buildVulnerabilityResultOptionsHtml(selectedResult);
+}
+
+function buildSensitivityPairOptionsHtml(selectedPair) {
+  return (state.vulnerabilitySensitivity.options?.pairs || [])
+    .map((entry) => `<option value="${escapeHtml(entry.pair)}" ${entry.pair === selectedPair ? "selected" : ""}>${escapeHtml(entry.label || entry.pair)}</option>`)
+    .join("");
+}
+
+function buildSensitivityMaterialOptionsHtml(selectedMaterial) {
+  return sensitivityMaterialOptions()
+    .map((material) => `<option value="${escapeHtml(material)}" ${material === selectedMaterial ? "selected" : ""}>${escapeHtml(material)}</option>`)
+    .join("");
+}
+
+function buildVulnerabilitySensitivityEditRowsHtml() {
+  const sensitivity = ensureVulnerabilitySensitivity();
+  if (!sensitivity.edits.length) {
+    return `<div class="order-empty">Add one or more country-step production edits before recalculating VI.</div>`;
+  }
+  return `
+    <div class="vulnerability-edit-table" role="table" aria-label="Batch production edits">
+      <div class="vulnerability-edit-row vulnerability-edit-row-head" role="row">
+        <span>Country</span>
+        <span>Step</span>
+        <span>Current production</span>
+        <span>Scenario production</span>
+        <span>Change</span>
+        <span></span>
+      </div>
+      ${sensitivity.edits
+        .map((edit, index) => {
+          const current = sensitivityProductionValue(edit.country, edit.step);
+          const delta = formatSensitivityProductionDelta(current, edit.scenarioProduction);
+          return `
+            <div class="vulnerability-edit-row" role="row">
+              <strong>${escapeHtml(edit.country)}</strong>
+              <span>${escapeHtml(vulnerabilitySensitivityStep(edit.step).label)}</span>
+              <span>${escapeHtml(formatSensitivityProduction(current))}</span>
+              <label class="vulnerability-edit-input-label">
+                <span class="sr-only">Scenario production</span>
+                <input class="text-input" data-vulnerability-edit-production="${escapeHtml(String(index))}" type="number" min="0" step="0.1" value="${escapeHtml(String(edit.scenarioProduction))}" />
+              </label>
+              <span class="vulnerability-edit-delta">${escapeHtml(delta)}</span>
+              <button class="ghost-btn vulnerability-edit-remove" type="button" data-vulnerability-remove-edit="${escapeHtml(String(index))}">Remove</button>
+            </div>
+          `;
+        })
+        .join("")}
+    </div>
+  `;
+}
+
+function buildVulnerabilitySensitivityControlsHtml() {
+  const sensitivity = ensureVulnerabilitySensitivity();
+  if (sensitivity.optionsLoading) {
+    return `
+      <div class="vulnerability-sensitivity-loading">
+        <strong>Loading graph production data</strong>
+        <span>Production baselines are read from the selected coefficient-set nodes before editing.</span>
+      </div>
+    `;
+  }
+  if (sensitivity.optionsError) {
+    return `
+      <div class="vulnerability-sensitivity-lock">
+        <strong>Could not load VI sensitivity setup</strong>
+        <span>${escapeHtml(sensitivity.optionsError)}</span>
+        <button id="vulnerability-sensitivity-retry-btn" class="ghost-btn" type="button">Retry</button>
+      </div>
+    `;
+  }
+  if (!sensitivity.options) {
+    return `
+      <div class="vulnerability-sensitivity-loading">
+        <strong>Preparing VI sensitivity setup</strong>
+        <span>Non-Guest mode will load editable production totals without changing the main Sankey or VI tables.</span>
+      </div>
+    `;
+  }
+
+  const draftCurrent = sensitivityProductionValue(sensitivity.draftCountry, sensitivity.draftStep);
+  const draftScenario = Number.isFinite(asNumber(sensitivity.draftScenarioProduction))
+    ? roundSensitivityProduction(sensitivity.draftScenarioProduction)
+    : roundSensitivityProduction(draftCurrent);
+  const draftDelta = formatSensitivityProductionDelta(draftCurrent, draftScenario);
+  return `
+    <div class="vulnerability-sensitivity-sandbox vulnerability-sensitivity-sandbox-exact">
+      <section class="vulnerability-sensitivity-section vulnerability-sensitivity-scenario">
+        <div class="vulnerability-sensitivity-section-head">
+          <span>Scenario setup</span>
+          <strong>Batch-edit production and choose the Conversion Factor Optimization set</strong>
+          <small>Each recalculation copies the selected graph, applies these edits, then runs the original VI graph algorithms.</small>
+        </div>
+        <div class="vulnerability-sensitivity-controls vulnerability-sensitivity-controls-exact">
+          <label class="vulnerability-sensitivity-field" for="vulnerability-sensitivity-result-select">
+            <span>Conversion Factor Optimization</span>
+            <select id="vulnerability-sensitivity-result-select" class="text-input">
+              ${buildSensitivityResultOptionsHtml(sensitivity.resultMode)}
+            </select>
+          </label>
+          <label class="vulnerability-sensitivity-field" for="vulnerability-sensitivity-metal-select">
+            <span>VI metal</span>
+            <select id="vulnerability-sensitivity-metal-select" class="text-input">
+              ${buildVulnerabilityMetalOptionsHtml(sensitivity.selectedMetal)}
+            </select>
+          </label>
+          <label class="vulnerability-sensitivity-field" for="vulnerability-sensitivity-material-select">
+            <span>Material type</span>
+            <select id="vulnerability-sensitivity-material-select" class="text-input">
+              ${buildSensitivityMaterialOptionsHtml(sensitivity.selectedMaterial)}
+            </select>
+          </label>
+          <label class="vulnerability-sensitivity-field" for="vulnerability-sensitivity-country-select">
+            <span>Country</span>
+            <select id="vulnerability-sensitivity-country-select" class="text-input">
+              ${buildSensitivityCountryOptionsHtml(sensitivity.draftCountry)}
+            </select>
+          </label>
+          <label class="vulnerability-sensitivity-field" for="vulnerability-sensitivity-step-select">
+            <span>Step</span>
+            <select id="vulnerability-sensitivity-step-select" class="text-input">
+              ${buildSensitivityStepOptionsHtml(sensitivity.draftStep)}
+            </select>
+          </label>
+          <label class="vulnerability-sensitivity-field" for="vulnerability-sensitivity-draft-production-input">
+            <span>Scenario production</span>
+            <input id="vulnerability-sensitivity-draft-production-input" class="text-input" type="number" min="0" step="0.1" value="${escapeHtml(String(draftScenario))}" />
+          </label>
+          <article class="vulnerability-production-field vulnerability-production-delta">
+            <span>Current</span>
+            <strong>${escapeHtml(formatSensitivityProduction(draftCurrent))}</strong>
+            <small>${escapeHtml(draftDelta)}</small>
+          </article>
+          <button id="vulnerability-sensitivity-add-edit-btn" class="ghost-btn" type="button">Add edit</button>
+        </div>
+      </section>
+      <section class="vulnerability-sensitivity-section vulnerability-production-editor">
+        <div class="vulnerability-sensitivity-section-head">
+          <span>Production editor</span>
+          <strong>${escapeHtml(`${sensitivity.edits.length} active ${sensitivity.edits.length === 1 ? "edit" : "edits"}`)}</strong>
+          <small>Scenario production values are temporary and scoped to this lab.</small>
+        </div>
+        ${buildVulnerabilitySensitivityEditRowsHtml()}
+        <div class="vulnerability-sensitivity-actions">
+          <button id="vulnerability-sensitivity-reset-btn" class="ghost-btn" type="button" ${sensitivity.edits.length ? "" : "disabled"}>Reset edits</button>
+          <button id="vulnerability-sensitivity-recalculate-btn" class="primary-btn" type="button" ${sensitivity.edits.length || sensitivity.resultLoading ? "" : "disabled"}>${sensitivity.resultLoading ? "Recalculating..." : "Recalculate VI"}</button>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function sensitivityResultCountry(result, preferredCountry = state.vulnerabilitySensitivity.outputCountry) {
+  const countries = result?.countries || [];
+  return countries.find((entry) => entry.country === preferredCountry) || countries[0] || null;
+}
+
+function buildSensitivitySummaryCardHtml(caseConfig, entry) {
+  const current = entry?.current;
+  const scenario = entry?.scenario;
+  const delta = entry?.delta;
+  return `
+    <article class="vulnerability-sensitivity-case">
+      <div class="vulnerability-sensitivity-case-head">
+        <span>${escapeHtml(caseConfig.eyebrow)}</span>
+        <strong>${escapeHtml(caseConfig.label)}</strong>
+        ${buildVulnerabilityDeltaBadge(delta)}
+      </div>
+      <div class="vulnerability-sensitivity-bars">
+        <div class="vulnerability-sensitivity-bar-row">
+          <span>Current</span>
+          <div class="vulnerability-bar" aria-hidden="true"><span style="width: ${escapeHtml(vulnerabilityPercentWidth(current))}"></span></div>
+          <strong>${escapeHtml(formatVulnerabilityPercent(current))}</strong>
+        </div>
+        <div class="vulnerability-sensitivity-bar-row">
+          <span>Scenario</span>
+          <div class="vulnerability-bar vulnerability-sensitivity-bar" aria-hidden="true"><span style="width: ${escapeHtml(vulnerabilityPercentWidth(scenario))}"></span></div>
+          <strong>${escapeHtml(formatVulnerabilityPercent(scenario))}</strong>
+        </div>
+      </div>
+    </article>
+  `;
+}
+
+function buildSensitivityPairTableHtml(countryResult) {
+  const pairs = countryResult?.pairs || [];
+  if (!pairs.length) {
+    return `<div class="order-empty">No chemistry-pair VI rows are available for this output country.</div>`;
+  }
+  return `
+    <div class="table-scroll">
+      <table class="vulnerability-table vulnerability-sensitivity-pair-table">
+        <thead>
+          <tr>
+            <th>Pair</th>
+            <th>Case</th>
+            <th>Current</th>
+            <th>Scenario</th>
+            <th>Delta</th>
+            <th>Scenario denominator</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${pairs
+            .map((pair) => VULNERABILITY_CASE_GUIDE
+              .map((caseConfig, index) => {
+                const entry = pair[caseConfig.key] || {};
+                return `
+                  <tr class="${pair.selected ? "is-selected" : ""}">
+                    ${index === 0 ? `<th rowspan="${escapeHtml(String(VULNERABILITY_CASE_GUIDE.length))}">${escapeHtml(pair.pair)}</th>` : ""}
+                    <td><strong>${escapeHtml(caseConfig.label)}</strong></td>
+                    <td>${escapeHtml(formatVulnerabilityPercent(entry.current))}</td>
+                    <td>${escapeHtml(formatVulnerabilityPercent(entry.scenario))}</td>
+                    <td>${buildVulnerabilityDeltaBadge(entry.delta)}</td>
+                    ${index === 0 ? `<td rowspan="${escapeHtml(String(VULNERABILITY_CASE_GUIDE.length))}">${escapeHtml(formatSensitivityProduction(pair.scenarioDenominator))}</td>` : ""}
+                  </tr>
+                `;
+              })
+              .join(""))
+            .join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function buildAppliedSensitivityEditsHtml(result) {
+  const edits = result?.edits || [];
+  if (!edits.length) {
+    return "";
+  }
+  return `
+    <div class="vulnerability-applied-edits">
+      ${edits
+        .map((edit) => `
+          <span>
+            <strong>${escapeHtml(edit.country)}</strong>
+            ${escapeHtml(edit.stepLabel || vulnerabilitySensitivityStep(edit.step).label)}
+            ${escapeHtml(formatSensitivityProduction(edit.currentProduction))}
+            to
+            ${escapeHtml(formatSensitivityProduction(edit.scenarioProduction))}
+          </span>
+        `)
+        .join("")}
+    </div>
+  `;
+}
+
+function buildVulnerabilitySensitivityOutputHtml() {
+  const sensitivity = ensureVulnerabilitySensitivity();
+  if (sensitivity.resultLoading) {
+    return `
+      <div class="vulnerability-sensitivity-output">
+        <div class="vulnerability-sensitivity-output-head">
+          <span>Scenario Output</span>
+          <strong>Running original VI recomputation</strong>
+          <small>The sandbox graph is being recalculated without mutating the main Sankey or VI tables.</small>
+        </div>
+        <div class="order-empty">Recalculating VI from the edited graph...</div>
+      </div>
+    `;
+  }
+  if (sensitivity.resultError) {
+    return `
+      <div class="vulnerability-sensitivity-output">
+        <div class="vulnerability-sensitivity-output-head">
+          <span>Scenario Output</span>
+          <strong>Recalculation failed</strong>
+          <small>${escapeHtml(sensitivity.resultError)}</small>
+        </div>
+      </div>
+    `;
+  }
+  const result = sensitivity.result;
+  if (!result) {
+    return `
+      <div class="vulnerability-sensitivity-output">
+        <div class="vulnerability-sensitivity-output-head">
+          <span>Scenario Output</span>
+          <strong>Ready for exact VI recomputation</strong>
+          <small>Add one or more production edits, then run Recalculate VI. Main Sankey and VI tables remain unchanged.</small>
+        </div>
+        <div class="order-empty">No sensitivity result has been applied to this sandbox yet.</div>
+      </div>
+    `;
+  }
+  const countries = result.countries || [];
+  const countryResult = sensitivityResultCountry(result);
+  if (!countryResult) {
+    return `<div class="order-empty">No output-country VI result is available for this recalculation.</div>`;
+  }
+  sensitivity.outputCountry = countryResult.country;
+  const selectedPair = countryResult.selectedPair || result.pair || sensitivity.selectedPair || "";
+  const selectedScope = parseVulnerabilityPair(selectedPair);
+  const selectedScopeLabel = selectedScope.material
+    ? `${selectedScope.material} on ${selectedScope.metal || result.metal || sensitivity.selectedMetal}`
+    : (selectedPair || "selected material");
+  return `
+    <div class="vulnerability-sensitivity-output">
+      <div class="vulnerability-sensitivity-output-head vulnerability-sensitivity-output-toolbar">
+        <div class="vulnerability-sensitivity-output-title">
+          <span>Scenario Output</span>
+          <strong>${escapeHtml(`${countryResult.country} | ${result.metal || sensitivity.selectedMetal} ${result.year || state.year} | ${resultModeLabel(result.resultMode)}`)}</strong>
+          <small>${escapeHtml(`Material scope: ${selectedScopeLabel}. Main Sankey and primary VI tables remain unchanged.`)}</small>
+        </div>
+        <label class="vulnerability-sensitivity-field" for="vulnerability-sensitivity-output-country-select">
+          <span>View country</span>
+          <select id="vulnerability-sensitivity-output-country-select" class="text-input">
+            ${countries
+              .map((entry) => `<option value="${escapeHtml(entry.country)}" ${entry.country === countryResult.country ? "selected" : ""}>${escapeHtml(entry.country)}</option>`)
+              .join("")}
+          </select>
+        </label>
+      </div>
+      <div class="vulnerability-sensitivity-summary">
+        <article>
+          <span>Applied edits</span>
+          <strong>${escapeHtml(String((result.edits || []).length))}</strong>
+          <small>Temporary country-step production changes.</small>
+        </article>
+        <article>
+          <span>Method</span>
+          <strong>Exact VI</strong>
+          <small>${escapeHtml(`Original graph algorithms for ${selectedScopeLabel}.`)}</small>
+        </article>
+      </div>
+      ${buildAppliedSensitivityEditsHtml(result)}
+      <div class="vulnerability-sensitivity-case-grid">
+        ${VULNERABILITY_CASE_GUIDE
+          .map((caseConfig) => buildSensitivitySummaryCardHtml(caseConfig, countryResult.summary?.[caseConfig.key]))
+          .join("")}
+      </div>
+      ${buildSensitivityStageProfileHtml(countryResult)}
+      ${buildSensitivityPairTableHtml(countryResult)}
+    </div>
+  `;
+}
+
+function buildVulnerabilitySensitivityPanelHtml() {
+  if (state.accessMode !== "analyst" || !state.accessUnlocked) {
+    return `
+      <div class="vulnerability-sensitivity-lock">
+        <strong>VI Sensitivity requires Non-Guest Login</strong>
+        <span>Guest mode keeps production editing and recalculation controls unavailable.</span>
+      </div>
+    `;
+  }
+  return `
+    <div class="vulnerability-sensitivity-shell">
+      ${buildVulnerabilitySensitivityControlsHtml()}
+      ${buildVulnerabilitySensitivityOutputHtml()}
+    </div>
+  `;
+}
+
+function syncVulnerabilitySensitivityFromControls() {
+  const sensitivity = ensureVulnerabilitySensitivity();
+  const resultSelect = document.getElementById("vulnerability-sensitivity-result-select");
+  const metalSelect = document.getElementById("vulnerability-sensitivity-metal-select");
+  const materialSelect = document.getElementById("vulnerability-sensitivity-material-select");
+  const countrySelect = document.getElementById("vulnerability-sensitivity-country-select");
+  const stepSelect = document.getElementById("vulnerability-sensitivity-step-select");
+  const draftInput = document.getElementById("vulnerability-sensitivity-draft-production-input");
+  const previousResult = sensitivity.resultMode;
+  const previousMetal = sensitivity.selectedMetal;
+  const previousMaterial = sensitivity.selectedMaterial;
+  sensitivity.resultMode = resultSelect?.value || sensitivity.resultMode;
+  sensitivity.selectedMetal = metalSelect?.value || sensitivity.selectedMetal;
+  sensitivity.selectedMaterial = materialSelect?.value || sensitivity.selectedMaterial;
+  sensitivity.selectedPair = vulnerabilityPairForMaterial(sensitivity.selectedMaterial, sensitivity.selectedMetal);
+  sensitivity.draftCountry = countrySelect?.value || sensitivity.draftCountry;
+  sensitivity.draftStep = stepSelect?.value || sensitivity.draftStep;
+  const draftValue = asNumber(draftInput?.value);
+  if (Number.isFinite(draftValue)) {
+    sensitivity.draftScenarioProduction = Math.max(0, roundSensitivityProduction(draftValue));
+  }
+  document.querySelectorAll("[data-vulnerability-edit-production]").forEach((input) => {
+    const index = Number(input.dataset.vulnerabilityEditProduction);
+    const value = asNumber(input.value);
+    if (Number.isInteger(index) && sensitivity.edits[index] && Number.isFinite(value)) {
+      sensitivity.edits[index].scenarioProduction = Math.max(0, roundSensitivityProduction(value));
+    }
+  });
+  if (previousResult !== sensitivity.resultMode) {
+    sensitivity.options = null;
+    sensitivity.optionsKey = "";
+    sensitivity.optionsError = "";
+    sensitivity.result = null;
+    sensitivity.resultError = "";
+  }
+  if (previousMetal !== sensitivity.selectedMetal) {
+    sensitivity.options = null;
+    sensitivity.optionsKey = "";
+    sensitivity.optionsError = "";
+    sensitivity.edits = [];
+    sensitivity.draftCountry = "";
+    sensitivity.draftScenarioProduction = "";
+    sensitivity.result = null;
+    sensitivity.resultError = "";
+  } else if (previousMaterial !== sensitivity.selectedMaterial) {
+    sensitivity.result = null;
+    sensitivity.resultError = "";
+  }
+  ensureVulnerabilitySensitivity();
+}
+
+function addVulnerabilitySensitivityEdit() {
+  const sensitivity = ensureVulnerabilitySensitivity();
+  const country = sensitivity.draftCountry;
+  const step = vulnerabilitySensitivityStep(sensitivity.draftStep).key;
+  const current = sensitivityProductionValue(country, step);
+  const scenario = Number.isFinite(asNumber(sensitivity.draftScenarioProduction))
+    ? Math.max(0, roundSensitivityProduction(sensitivity.draftScenarioProduction))
+    : roundSensitivityProduction(current);
+  const nextEdit = { country, step, scenarioProduction: scenario };
+  const existingIndex = sensitivity.edits.findIndex((edit) => edit.country === country && edit.step === step);
+  if (existingIndex >= 0) {
+    sensitivity.edits[existingIndex] = nextEdit;
+  } else {
+    sensitivity.edits = [...sensitivity.edits, nextEdit];
+  }
+  sensitivity.result = null;
+  sensitivity.resultError = "";
+}
+
+async function recalculateVulnerabilitySensitivity() {
+  const sensitivity = ensureVulnerabilitySensitivity();
+  if (!sensitivity.edits.length) {
+    sensitivity.resultError = "Add at least one production edit before recalculating VI.";
+    renderVulnerabilitySensitivityPanel();
+    return;
+  }
+  const reportCountries = Array.from(
+    new Set([
+      sensitivity.outputCountry,
+      sensitivity.draftCountry,
+      ...sensitivity.edits.map((edit) => edit.country),
+    ].filter(Boolean)),
+  );
+  sensitivity.resultLoading = true;
+  sensitivity.resultError = "";
+  renderVulnerabilitySensitivityPanel();
+  try {
+    const payload = await apiClient.recalculateVulnerabilitySensitivity({
+      ...vulnerabilitySensitivityRequestBase(),
+      pair: sensitivity.selectedPair,
+      edits: sensitivity.edits,
+      reportCountries,
+    });
+    sensitivity.result = payload;
+    const resultCountries = (payload.countries || []).map((entry) => entry.country);
+    sensitivity.outputCountry = resultCountries.includes(sensitivity.outputCountry)
+      ? sensitivity.outputCountry
+      : resultCountries[0] || "";
+  } catch (error) {
+    sensitivity.result = null;
+    sensitivity.resultError = error.message || "Vulnerability sensitivity recalculation failed.";
+  } finally {
+    sensitivity.resultLoading = false;
+    renderVulnerabilitySensitivityPanel();
+  }
+}
+
+function bindVulnerabilitySensitivityControls() {
+  const sensitivity = ensureVulnerabilitySensitivity();
+  const retryButton = document.getElementById("vulnerability-sensitivity-retry-btn");
+  if (retryButton) {
+    retryButton.onclick = () => {
+      loadVulnerabilitySensitivityOptions({ force: true });
+    };
+  }
+  const resultSelect = document.getElementById("vulnerability-sensitivity-result-select");
+  if (resultSelect) {
+    resultSelect.onchange = () => {
+      syncVulnerabilitySensitivityFromControls();
+      renderVulnerabilitySensitivityPanel();
+      loadVulnerabilitySensitivityOptions({ force: true });
+    };
+  }
+  const metalSelect = document.getElementById("vulnerability-sensitivity-metal-select");
+  if (metalSelect) {
+    metalSelect.onchange = () => {
+      syncVulnerabilitySensitivityFromControls();
+      renderVulnerabilitySensitivityPanel();
+      loadVulnerabilitySensitivityOptions({ force: true });
+    };
+  }
+  const materialSelect = document.getElementById("vulnerability-sensitivity-material-select");
+  if (materialSelect) {
+    materialSelect.onchange = () => {
+      syncVulnerabilitySensitivityFromControls();
+      sensitivity.result = null;
+      renderVulnerabilitySensitivityPanel();
+    };
+  }
+  ["vulnerability-sensitivity-country-select", "vulnerability-sensitivity-step-select"].forEach((id) => {
+    const control = document.getElementById(id);
+    if (control) {
+      control.onchange = () => {
+        syncVulnerabilitySensitivityFromControls();
+        sensitivity.draftScenarioProduction = "";
+        sensitivity.result = null;
+        renderVulnerabilitySensitivityPanel();
+      };
+    }
+  });
+  const draftInput = document.getElementById("vulnerability-sensitivity-draft-production-input");
+  if (draftInput) {
+    draftInput.onchange = () => {
+      syncVulnerabilitySensitivityFromControls();
+      renderVulnerabilitySensitivityPanel();
+    };
+  }
+  document.getElementById("vulnerability-sensitivity-add-edit-btn")?.addEventListener("click", () => {
+    syncVulnerabilitySensitivityFromControls();
+    addVulnerabilitySensitivityEdit();
+    renderVulnerabilitySensitivityPanel();
+  });
+  document.querySelectorAll("[data-vulnerability-edit-production]").forEach((input) => {
+    input.onchange = () => {
+      syncVulnerabilitySensitivityFromControls();
+      state.vulnerabilitySensitivity.result = null;
+      renderVulnerabilitySensitivityPanel();
+    };
+  });
+  document.querySelectorAll("[data-vulnerability-remove-edit]").forEach((button) => {
+    button.onclick = () => {
+      const index = Number(button.dataset.vulnerabilityRemoveEdit);
+      if (Number.isInteger(index)) {
+        state.vulnerabilitySensitivity.edits = state.vulnerabilitySensitivity.edits.filter((_edit, editIndex) => editIndex !== index);
+        state.vulnerabilitySensitivity.result = null;
+        renderVulnerabilitySensitivityPanel();
+      }
+    };
+  });
+  document.getElementById("vulnerability-sensitivity-reset-btn")?.addEventListener("click", () => {
+    state.vulnerabilitySensitivity.edits = [];
+    state.vulnerabilitySensitivity.draftScenarioProduction = "";
+    state.vulnerabilitySensitivity.result = null;
+    state.vulnerabilitySensitivity.resultError = "";
+    renderVulnerabilitySensitivityPanel();
+  });
+  document.getElementById("vulnerability-sensitivity-recalculate-btn")?.addEventListener("click", () => {
+    syncVulnerabilitySensitivityFromControls();
+    recalculateVulnerabilitySensitivity();
+  });
+  const outputCountrySelect = document.getElementById("vulnerability-sensitivity-output-country-select");
+  if (outputCountrySelect) {
+    outputCountrySelect.onchange = () => {
+      state.vulnerabilitySensitivity.outputCountry = outputCountrySelect.value;
+      renderVulnerabilitySensitivityPanel();
+    };
+  }
+}
+
+function renderVulnerabilityDashboard() {
+  const countryOptions = ensureVulnerabilityCountry();
+  const record = currentVulnerabilityRecord();
+  const status = document.getElementById("vulnerability-status");
+  if (status) {
+    const scopeLabel = record?.metal ? `${vulnerabilityMetalId()} ${record.year}` : `${vulnerabilityMetalId()} scenario`;
+    status.textContent = `${scopeLabel} vulnerability summary for ${resultModeLabel(state.resultMode)}.`;
+  }
+  const caseGuideHost = document.getElementById("vulnerability-case-guide");
+  void countryOptions;
+  if (caseGuideHost) {
+    caseGuideHost.innerHTML = buildVulnerabilityCaseGuideHtml();
+  }
+  renderVulnerabilityCountryTrend();
+  renderVulnerabilitySensitivityPanel();
+  bindVulnerabilityCountryControls();
 }
 
 function renderDiagnosticExplorerSections(focusId = "") {
@@ -2481,7 +5560,7 @@ function bindDiagnosticExplorerControls() {
 
 function buildTransitionCardsHtml(rows) {
   if (!rows || !rows.length) {
-    return `<div class="order-empty">No stage diagnostics are available for the current selection.</div>`;
+    return `<div class="order-empty">No stage analysis rows are available for the current selection.</div>`;
   }
   return `
     <div class="transition-stage-grid">
@@ -2490,13 +5569,29 @@ function buildTransitionCardsHtml(rows) {
   `;
 }
 
+function renderLockedAnalysis() {
+  const lockedHtml = `
+    <div class="analysis-lock-panel">
+      <strong>Analysis requires Non-Guest mode</strong>
+      <span>Guest mode keeps analysis, stage totals, and detailed optimization tables hidden. Use Access controls to unlock Analyst view.</span>
+    </div>
+  `;
+  document.getElementById("metrics-table").innerHTML = lockedHtml;
+  document.getElementById("stage-table").innerHTML = "";
+  document.getElementById("parameter-table").innerHTML = "";
+  document.getElementById("producer-coefficient-table").innerHTML = "";
+  document.getElementById("trade-flow-table").innerHTML = "";
+}
+
 function renderTables(tables) {
   state.currentTables = tables || {};
   const board = document.getElementById("data-board");
-  board.classList.toggle("is-hidden", state.accessMode !== "analyst");
+  board.classList.toggle("analysis-board-locked", state.accessMode !== "analyst");
   if (state.accessMode !== "analyst") {
+    renderLockedAnalysis();
     return;
   }
+  board.classList.remove("analysis-board-locked");
   const metricRows = state.currentTables.metrics || [];
   const stageRows = state.currentTables.stages || [];
   const parameterRows = state.currentTables.parameters || [];
@@ -2525,6 +5620,29 @@ function renderTables(tables) {
   renderDiagnosticExplorerSections();
 }
 
+function bindSelectionMenus() {
+  document.querySelectorAll("[data-selection-menu-trigger]").forEach((trigger) => {
+    trigger.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const menuName = trigger.dataset.selectionMenuTrigger;
+      selectionMenuOpen = selectionMenuOpen === menuName ? null : menuName;
+      renderSelectionMenuStates();
+    });
+  });
+  document.addEventListener("click", (event) => {
+    if (!selectionMenuOpen || event.target.closest(".selection-menu")) {
+      return;
+    }
+    closeSelectionMenus();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      closeSelectionMenus();
+    }
+  });
+}
+
 async function bootstrap() {
   const payload = await apiClient.getBootstrap();
   const metadata = payload.metadata;
@@ -2533,7 +5651,7 @@ async function bootstrap() {
   state.metal = payload.metadata.defaultMetal;
   state.theme = payload.metadata.defaultTheme;
   state.years = payload.metadata.years;
-  state.resultModes = payload.metadata.resultModes || ["baseline", "first_optimization"];
+  state.resultModes = payload.metadata.resultModes || ["baseline", "pareto_optimal", "sn_minimum", "deviation_minimum"];
   state.resultLabels = payload.metadata.resultLabels || {};
   state.tableViews = payload.metadata.tableViews || ["auto", "baseline", "optimized", "compare"];
   state.tableViewLabels = payload.metadata.tableViewLabels || {};
@@ -2553,6 +5671,8 @@ async function bootstrap() {
   state.year = payload.metadata.defaultYear || state.years[state.years.length - 1];
   const params = new URLSearchParams(window.location.search);
   hydrateStateFromUrl(state, metadata);
+  state.vulnerabilityMetal = params.get("viMetal") || state.metal;
+  vulnerabilityMetalId();
   if (!params.has("ref")) {
     state.referenceQty = state.referenceQtyDefaults[state.metal] || payload.metadata.defaultReferenceQuantity;
   }
@@ -2564,11 +5684,16 @@ async function bootstrap() {
   renderCobaltModeButtons();
   renderAccessControls();
   renderResultButtons();
+  updateStateChips();
+  bindSelectionMenus();
+  bindControlsToggle();
 
   const yearButtons = document.getElementById("year-buttons");
   const renderYearButtons = () => renderPills(yearButtons, state.years, state.year, selectYear, String);
   const selectYear = async (year) => {
     state.year = year;
+    setSelectionValue("year-selection-value", String(year));
+    closeSelectionMenus();
     renderYearButtons();
     await loadFigure();
   };
@@ -2614,11 +5739,9 @@ async function bootstrap() {
   document.getElementById("sort-all-continent")?.addEventListener("click", async () => {
     await applySortModeToAll("continent");
   });
-  document.querySelectorAll(".top-nav-primary a").forEach((link) => {
-    link.addEventListener("click", (event) => {
-      event.stopPropagation();
-    });
-  });
+  state.workspaceView = workspaceViewFromHash(window.location.hash);
+  bindWorkspaceNavigation();
+  applyWorkspaceView();
   window.addEventListener(
     "resize",
     debounce(() => {
@@ -2660,18 +5783,36 @@ async function bootstrap() {
 
 function renderResultButtons() {
   const container = document.getElementById("result-buttons");
-  renderPills(
-    container,
-    state.resultModes,
-    state.resultMode,
-    async (mode) => {
-      state.resultMode = mode;
+  if (!container) {
+    return;
+  }
+  setSelectionValue("result-selection-value", resultModeLabel(state.resultMode));
+  container.classList.remove("result-picker");
+  container.innerHTML = state.resultModes
+    .map(
+      (mode) => `
+        <button type="button" class="pill-btn ${state.resultMode === mode ? "active" : ""}" role="menuitemradio" aria-checked="${state.resultMode === mode ? "true" : "false"}" data-result-mode="${escapeHtml(mode)}">
+          ${escapeHtml(resultModeLabel(mode))}
+        </button>
+      `,
+    )
+    .join("");
+  container.querySelectorAll("[data-result-mode]").forEach((button) => {
+    button.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      const nextMode = button.dataset.resultMode;
+      closeSelectionMenus();
+      if (!nextMode || state.resultMode === nextMode) {
+        renderResultButtons();
+        return;
+      }
+      state.resultMode = nextMode;
       ensureLayoutState(state.metal, state.resultMode, state.cobaltMode);
       renderResultButtons();
       await loadFigure();
-    },
-    resultModeLabel,
-  );
+    });
+  });
+  renderSelectionMenuStates();
 }
 
 bootstrap().catch((error) => {

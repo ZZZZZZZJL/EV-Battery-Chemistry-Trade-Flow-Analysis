@@ -51,7 +51,9 @@ export function hydrateStateFromUrl(state, metadata) {
   }
   state.year = pickYear(params, metadata.years || [], state.year);
   state.theme = pickAllowed(params, "theme", metadata.themes || [], state.theme);
-  state.resultMode = pickAllowed(params, "result", metadata.resultModes || [], state.resultMode);
+  const rawResultMode = params.get("result");
+  const resultAlias = rawResultMode === "first_optimization" ? "pareto_optimal" : rawResultMode;
+  state.resultMode = resultAlias && (metadata.resultModes || []).includes(resultAlias) ? resultAlias : state.resultMode;
   state.cobaltMode = pickAllowed(params, "cobalt", metadata.cobaltModes || [], state.cobaltMode);
   state.referenceQty = pickReferenceQuantity(params, state.referenceQty);
 
@@ -90,6 +92,11 @@ export function syncStateToUrl(state) {
     params.set("s7Merge", "1");
   } else {
     params.delete("s7Merge");
+  }
+  if (state.vulnerabilityMetal && state.vulnerabilityMetal !== state.metal) {
+    params.set("viMetal", state.vulnerabilityMetal);
+  } else {
+    params.delete("viMetal");
   }
   params.delete("access");
   params.delete("password");

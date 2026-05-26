@@ -538,6 +538,7 @@ def _build_stage_controls(
     stage_orders: dict[str, list[str]],
     special_positions: dict[str, str],
     aggregate_counts: dict[str, int],
+    aggregate_preserve: dict[str, list[str]],
 ) -> dict[str, dict[str, Any]]:
     values = _node_values(nodes, links)
     grouped = _stage_nodes(nodes)
@@ -563,9 +564,11 @@ def _build_stage_controls(
             "hasSpecialNodes": bool(special_keys),
             "specialNodeCount": len(special_keys),
             "aggregateCount": aggregate_counts.get(stage, 0) if sort_mode != "continent" else 0,
+            "aggregatePreserve": list(aggregate_preserve.get(stage, [])),
             "maxAggregateCount": max_aggregate_count,
             "items": [
                 {
+                    "key": key,
                     "label": nodes[key].label,
                     "value": round(values.get(key, 0.0), 3),
                     "group": nodes[key].region or "Unknown",
@@ -610,6 +613,40 @@ def _validate_aggregate_counts(
         if requested > max_count:
             raise ValueError(f"Aggregate count for {stage} must be between 0 and {max_count}.")
         resolved[stage] = requested
+    return resolved
+
+
+def _validate_aggregate_preserve(
+    nodes: dict[str, NodeSpec],
+    aggregate_preserve: dict[str, list[str]] | None,
+) -> dict[str, list[str]]:
+    regular_by_stage: dict[str, dict[str, str]] = {stage: {} for stage in STAGE_ORDER}
+    labels_by_stage: dict[str, dict[str, list[str]]] = {stage: {} for stage in STAGE_ORDER}
+    for key, node in nodes.items():
+        if node.kind != "regular" or node.stage not in regular_by_stage:
+            continue
+        regular_by_stage[node.stage][key] = key
+        labels_by_stage[node.stage].setdefault(node.label, []).append(key)
+
+    resolved: dict[str, list[str]] = {}
+    for stage in STAGE_ORDER:
+        stage_values = aggregate_preserve or {}
+        raw_values = stage_values.get(stage, [])
+        if not isinstance(raw_values, list):
+            raw_values = []
+        selected: list[str] = []
+        for raw_value in raw_values:
+            value = str(raw_value).strip()
+            if not value:
+                continue
+            if value in regular_by_stage[stage]:
+                candidates = [value]
+            else:
+                candidates = labels_by_stage[stage].get(value, [])
+            for candidate in candidates:
+                if candidate not in selected:
+                    selected.append(candidate)
+        resolved[stage] = selected
     return resolved
 
 
@@ -673,6 +710,7 @@ def _apply_stage_aggregation(
     stage_orders: dict[str, list[str]],
     special_positions: dict[str, str],
     aggregate_counts: dict[str, int],
+    aggregate_preserve: dict[str, list[str]],
     view_mode: str,
     epsilon: float,
 ) -> tuple[dict[str, NodeSpec], list[LinkSpec]]:
@@ -705,7 +743,15 @@ def _apply_stage_aggregation(
         regular_keys = [key for key in ordered_keys if transformed_nodes[key].kind == "regular"]
         if len(regular_keys) <= 1:
             continue
-        tail_keys = regular_keys[-tail_count:]
+        preserve_keys = set(aggregate_preserve.get(stage, []))
+        tail_keys: list[str] = []
+        for key in reversed(regular_keys):
+            if key in preserve_keys:
+                continue
+            tail_keys.append(key)
+            if len(tail_keys) >= tail_count:
+                break
+        tail_keys.reverse()
         if not tail_keys:
             continue
         tail_labels = [transformed_nodes[key].label for key in tail_keys]
@@ -1238,6 +1284,7 @@ def make_payload(
     epsilon: float,
     special_positions: dict[str, str] | None = None,
     aggregate_counts: dict[str, int] | None = None,
+    aggregate_preserve: dict[str, list[str]] | None = None,
     theme: str = DEFAULT_THEME,
 ) -> dict[str, Any]:
     resolved_view_mode = resolve_view_mode(view_mode)
@@ -1269,6 +1316,7 @@ def make_payload(
         resolved_special_positions,
         aggregate_counts,
     )
+    resolved_aggregate_preserve = _validate_aggregate_preserve(visible_nodes, aggregate_preserve)
     figure_nodes, figure_links = _apply_stage_aggregation(
         visible_nodes,
         visible_links,
@@ -1276,6 +1324,7 @@ def make_payload(
         resolved_stage_orders,
         resolved_special_positions,
         resolved_aggregate_counts,
+        resolved_aggregate_preserve,
         resolved_view_mode,
         epsilon,
     )
@@ -1286,6 +1335,7 @@ def make_payload(
         "viewMode": resolved_view_mode,
         "referenceQuantity": reference_qty,
         "aggregateCounts": resolved_aggregate_counts,
+        "aggregatePreserve": resolved_aggregate_preserve,
         "specialPositions": resolved_special_positions,
         "figure": _build_figure(
             figure_nodes,
@@ -1308,6 +1358,7 @@ def make_payload(
             resolved_stage_orders,
             resolved_special_positions,
             resolved_aggregate_counts,
+            resolved_aggregate_preserve,
         ),
         "datasetStatus": dataset_status,
         "notes": notes,
