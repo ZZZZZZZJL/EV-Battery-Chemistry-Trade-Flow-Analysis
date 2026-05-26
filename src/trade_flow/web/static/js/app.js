@@ -232,10 +232,10 @@ const ANALYSIS_WORKSPACE_LABELS = {
 };
 
 const VULNERABILITY_RESULT_SERIES = [
-  { key: "baseline", label: "Original", className: "baseline", color: "#496d9b" },
-  { key: "pareto_optimal", label: "Multiobjective", className: "pareto", color: "#6fa27b" },
-  { key: "sn_minimum", label: "SN Minimum", className: "sn-minimum", color: "#bd7143" },
-  { key: "deviation_minimum", label: "Deviation Minimum", className: "deviation", color: "#7b6ab0" },
+  { key: "baseline", label: "Original", className: "baseline", color: "#496d9b", symbol: "circle" },
+  { key: "pareto_optimal", label: "Multiobjective", className: "pareto", color: "#6fa27b", symbol: "square" },
+  { key: "sn_minimum", label: "SN Minimum", className: "sn-minimum", color: "#bd7143", symbol: "diamond" },
+  { key: "deviation_minimum", label: "Deviation Minimum", className: "deviation", color: "#7b6ab0", symbol: "triangle-up" },
 ];
 
 const VULNERABILITY_CASE_GUIDE = [
@@ -2629,7 +2629,13 @@ function buildCoefficientDetailHtml(row, tradeRows) {
 
 function buildProducerCoefficientSectionsHtml(rows, tradeRows = []) {
   if (!rows || !rows.length) {
-    return `<div class="order-empty">Coefficient rows are only available when the selected optimization result exposes factor outputs.</div>`;
+    return `
+      <div class="order-empty">
+        No coefficient rows are present in the active runtime data for this optimization export.
+        Render deployments must include optimizer diagnostics such as intermediate coefficient CSVs
+        or workbook-backed selected-stage hyperparameter files under the configured app data directory.
+      </div>
+    `;
   }
 
   const visibleRows = filteredCoefficientRows(rows);
@@ -3849,7 +3855,8 @@ function buildVulnerabilityTrendPlotData(caseConfig, rows, years, countries) {
   return visibleCountries.flatMap((country) => {
     const countryIndex = countries.indexOf(country);
     const lineStyle = VULNERABILITY_COUNTRY_LINE_STYLES[countryIndex % VULNERABILITY_COUNTRY_LINE_STYLES.length];
-    return vulnerabilityResultChoices().map((series) => ({
+    const resultChoices = vulnerabilityResultChoices();
+    return resultChoices.map((series, seriesIndex) => ({
       type: "scatter",
       mode: "lines+markers",
       name: countries.length > 1 ? `${series.label} - ${country}` : series.label,
@@ -3865,20 +3872,23 @@ function buildVulnerabilityTrendPlotData(caseConfig, rows, years, countries) {
       opacity: countryIndex === 0 ? 1 : 0.72,
       line: {
         color: series.color,
-        width: countryIndex === 0 ? 2.8 : 2.1,
+        // The four optimization results can be numerically very close. Tapering
+        // widths by result lets lower traces remain visible as a subtle edge
+        // instead of being fully covered by the last drawn line.
+        width: Math.max(1.4, (countryIndex === 0 ? 3.6 : 2.8) - seriesIndex * 0.42),
         shape: "linear",
         dash: lineStyle.dash,
       },
       marker: {
         color: series.color,
-        symbol: lineStyle.symbol,
+        symbol: series.symbol,
         size: years.map((year) => (Number(year) === highlightedYear ? (countryIndex === 0 ? 10 : 8) : 6.5)),
         line: {
           color: "rgba(255, 253, 248, 0.96)",
           width: 1.4,
         },
       },
-      hovertemplate: `${escapeHtml(country)}<br>${escapeHtml(series.label)}<br>Year %{x}<br>${escapeHtml(caseConfig.label)}: %{y:.1f}%<extra></extra>`,
+      hovertemplate: `${escapeHtml(country)}<br>${escapeHtml(series.label)}<br>${escapeHtml(caseConfig.label)}: %{y:.1f}%<extra></extra>`,
     }));
   });
 }
@@ -4182,7 +4192,12 @@ function buildVulnerabilityTrendLayout(caseConfig, years) {
     paper_bgcolor: "rgba(0, 0, 0, 0)",
     plot_bgcolor: "rgba(0, 0, 0, 0)",
     showlegend: false,
-    hovermode: "closest",
+    hovermode: "x unified",
+    hoverlabel: {
+      bgcolor: "rgba(255, 253, 248, 0.98)",
+      bordercolor: "rgba(128, 111, 93, 0.22)",
+      font: { color: "#2f2721", size: 12 },
+    },
     dragmode: false,
     font: {
       family: "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
