@@ -356,6 +356,13 @@ def _first_existing_path(candidates: list[Path]) -> Path:
     return candidates[0]
 
 
+def _version_sort_key(path: Path) -> tuple[int, str]:
+    name = path.name.lower()
+    if name.startswith("v") and name[1:].isdigit():
+        return (int(name[1:]), name)
+    return (-1, name)
+
+
 def _special_mask(frame: pd.DataFrame) -> pd.Series:
     if frame.empty:
         return pd.Series(dtype=bool)
@@ -823,20 +830,53 @@ class OutputRepository:
         cache_key = (scenario, metal, cobalt_mode)
         if cache_key in self._coefficient_frame_cache:
             return self._coefficient_frame_cache[cache_key]
-        intermediate_dir = self.scenario_output_dirs[scenario] / "intermediate"
-        preferred_candidates = _intermediate_file_candidates(
-            intermediate_dir,
-            "first_optimization_coefficients.csv",
-            metal,
-            cobalt_mode,
-        )
-        path = next((candidate for candidate in preferred_candidates if candidate.exists()), None)
-        if path is None:
-            wildcard_candidates = sorted(intermediate_dir.glob("*coefficients*.csv"))
-            path = wildcard_candidates[0] if wildcard_candidates else preferred_candidates[0]
-        frame = pd.read_csv(path).fillna("") if path.exists() else self._load_selected_workbook_coefficients(scenario, metal)
+        candidate_paths: list[Path] = []
+        for intermediate_dir in self._coefficient_intermediate_dirs(scenario):
+            candidate_paths.extend(
+                _intermediate_file_candidates(
+                    intermediate_dir,
+                    "first_optimization_coefficients.csv",
+                    metal,
+                    cobalt_mode,
+                )
+            )
+            candidate_paths.extend(sorted(intermediate_dir.glob("*coefficients*.csv")))
+        path = next((candidate for candidate in candidate_paths if candidate.exists()), None)
+        frame = pd.read_csv(path).fillna("") if path is not None else self._load_selected_workbook_coefficients(scenario, metal)
         self._coefficient_frame_cache[cache_key] = frame
         return frame
+
+    def _coefficient_intermediate_dirs(self, scenario: str) -> list[Path]:
+        """Return coefficient search roots in runtime-preferred order.
+
+        Older runtime bundles kept optimizer coefficient CSVs under
+        `output_versions/<version>/output/intermediate` while newer bundles can
+        expose scenario-specific diagnostics beside `app_data/<scenario>`.  The
+        website should support both layouts because Render data updates are
+        intentionally decoupled from code deploys.
+        """
+        candidates = [
+            self.scenario_output_dirs[scenario] / "intermediate",
+            self.scenario_diagnostics_dirs.get(scenario, Path()) / "intermediate",
+            self.first_optimization_diagnostics_root / "intermediate",
+        ]
+        version_dirs = sorted(
+            (path for path in self.version_output_root.glob("v*") if path.is_dir()),
+            key=_version_sort_key,
+            reverse=True,
+        )
+        candidates.extend(version_dir / "output" / "intermediate" for version_dir in version_dirs)
+
+        seen: set[str] = set()
+        resolved: list[Path] = []
+        for candidate in candidates:
+            key = str(candidate.resolve() if candidate.exists() else candidate).lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            if candidate.exists():
+                resolved.append(candidate)
+        return resolved
 
     def _load_selected_workbook_coefficients(self, scenario: str, metal: str) -> pd.DataFrame:
         """Build coefficient explorer rows from selected optimizer reports when CSV diagnostics are not bundled."""
