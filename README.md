@@ -4,6 +4,7 @@ A local, public Flask workspace for configuring and generating EV battery
 critical-mineral Sankey diagrams. It wraps the established
 `manual_sankey_new` calculation and Plotly rendering pipeline instead of
 reimplementing material-balance logic in the browser.
+The online version is here: https://ev-battery-chemistry-trade-flow-analysis.onrender.com/
 
 ## What the website supports
 
