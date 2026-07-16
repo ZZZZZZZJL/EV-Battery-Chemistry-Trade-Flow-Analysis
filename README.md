@@ -100,16 +100,19 @@ Open <http://127.0.0.1:5050>.
 Create a Python Web Service from this repository and use:
 
 ```text
-Build Command: pip install -r requirements.txt && plotly_get_chrome -y
+Build Command: python scripts/render_build.py
 Start Command: gunicorn --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 300 app:app
 Health Check Path: /health
 ```
 
-Kaleido 1.x does not bundle Chrome, so `plotly_get_chrome -y` is required for
-PNG downloads. After changing the Build Command on an existing service, run
-**Manual Deploy -> Clear build cache & deploy**. Repository data and application
-code survive redeploys; uploaded SCInsight/Benchmark workbooks and generated
-artifacts remain intentionally ephemeral.
+Kaleido 1.x does not bundle Chrome. The build script uses the selected Render
+Python interpreter to install requirements and Chrome into the project-local
+`.render/chrome` directory, records the exact executable path, and performs a
+real PNG smoke test before the deploy can succeed. After changing the Build
+Command on an existing service, run **Manual Deploy -> Clear build cache &
+deploy**. Repository data and application code survive redeploys; uploaded
+SCInsight/Benchmark workbooks and generated artifacts remain intentionally
+ephemeral.
 
 The repository-relative defaults can be overridden with environment variables:
 
