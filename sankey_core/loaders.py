@@ -390,19 +390,37 @@ def load_production(settings: Settings, route: RouteSpec) -> ProductionData:
 
 
 def _quantity_to_tonnes(frame: pd.DataFrame) -> pd.Series:
+    tonnes = pd.Series(float("nan"), index=frame.index, dtype=float)
+    has_quantity_schema = False
     if "qtyUnitAbbr" in frame.columns and "qty" in frame.columns:
+        has_quantity_schema = True
         quantity = pd.to_numeric(frame["qty"], errors="coerce")
         unit = frame["qtyUnitAbbr"].fillna("").astype(str).str.strip().str.lower()
-        tonnes = pd.Series(float("nan"), index=frame.index, dtype=float)
         tonnes.loc[unit.eq("kg")] = quantity.loc[unit.eq("kg")] / 1000.0
         tonnes.loc[unit.isin({"t", "ton", "tonne", "tonnes"})] = quantity.loc[
             unit.isin({"t", "ton", "tonne", "tonnes"})
         ]
-        if tonnes.notna().any():
-            return tonnes.fillna(0.0)
-    if "netWgt" in frame.columns:
-        return pd.to_numeric(frame["netWgt"], errors="coerce").fillna(0.0) / 1000.0
-    raise ValueError("Raw trade file is missing usable qty/qtyUnitAbbr and netWgt columns.")
+
+    # UN Comtrade exports in this data series use both netWgt and netWeight.
+    # Apply the fallback row by row: a file can mix rows reported in kg with
+    # rows whose qty unit is N/A but whose net weight is still available.
+    for weight_column in ("netWgt", "netWeight"):
+        if weight_column not in frame.columns:
+            continue
+        has_quantity_schema = True
+        fallback = pd.to_numeric(frame[weight_column], errors="coerce") / 1000.0
+        tonnes = tonnes.fillna(fallback)
+
+    if tonnes.notna().any():
+        return tonnes.fillna(0.0)
+    if has_quantity_schema:
+        # A few reporter/HS files contain the expected Comtrade quantity
+        # columns but no reported values. They contribute zero trade rather
+        # than invalidating every other reporter in the scenario.
+        return pd.Series(0.0, index=frame.index, dtype=float)
+    raise ValueError(
+        "Raw trade file is missing usable qty/qtyUnitAbbr and netWgt/netWeight columns."
+    )
 
 
 def load_trade_records(settings: Settings, transition_key: str) -> list[TradeRecord]:
@@ -451,7 +469,8 @@ def load_trade_records(settings: Settings, transition_key: str) -> list[TradeRec
                 continue
             frame = pd.read_csv(
                 path,
-                usecols=lambda column: column in {"partnerCode", "qtyUnitAbbr", "qty", "netWgt"},
+                usecols=lambda column: column
+                in {"partnerCode", "qtyUnitAbbr", "qty", "netWgt", "netWeight"},
             )
             if "partnerCode" not in frame.columns:
                 continue

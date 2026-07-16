@@ -478,9 +478,12 @@ def run_pipeline(settings: Settings) -> dict[str, str]:
     except Exception as exc:
         message = str(exc)
         if "kaleido" in message.lower() or "chrome" in message.lower():
+            detail = " ".join(message.split())
             raise RuntimeError(
-                "PNG export requires Kaleido and a Chrome-compatible browser. "
-                "Install this folder's requirements in the selected VS Code/PyCharm interpreter."
+                "PNG export requires Kaleido and a Chrome-compatible browser. On Render, set the "
+                "Build Command to `pip install -r requirements.txt && plotly_get_chrome -y`, then "
+                "run Manual Deploy > Clear build cache & deploy. "
+                f"Underlying export error: {detail}"
             ) from exc
         raise
 

@@ -137,6 +137,71 @@ class TradeLoaderTests(unittest.TestCase):
         self.assertEqual(records[0].exporter_id, 200)
         self.assertAlmostEqual(records[0].raw_quantity_tonnes, 2.5)
 
+    def test_net_weight_alias_is_used_when_qty_unit_is_unusable(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            reporter = root / "UNComtrade_2019_Import_ByPartner" / "reporter_100"
+            reporter.mkdir(parents=True)
+            path = reporter / "100_260400_M_2019_partners.csv"
+            path.write_text(
+                "partnerCode,qtyUnitAbbr,qty,netWeight\n"
+                "200,N/A,,2500\n",
+                encoding="utf-8",
+            )
+            records = load_trade_records(
+                settings(
+                    year=2019,
+                    trade_root=root,
+                    post_trade_hs={"post_trade_1": {"260400": 0.5}},
+                ),
+                "post_trade_1",
+            )
+        self.assertEqual(len(records), 1)
+        self.assertAlmostEqual(records[0].raw_quantity_tonnes, 2.5)
+
+    def test_net_weight_fallback_is_applied_per_row(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            reporter = root / "UNComtrade_2024_Import_ByPartner" / "reporter_100"
+            reporter.mkdir(parents=True)
+            path = reporter / "100_260400_M_2024_partners.csv"
+            path.write_text(
+                "partnerCode,qtyUnitAbbr,qty,netWgt\n"
+                "200,kg,2500,2500\n"
+                "300,N/A,,4000\n",
+                encoding="utf-8",
+            )
+            records = load_trade_records(
+                settings(
+                    trade_root=root,
+                    post_trade_hs={"post_trade_1": {"260400": 0.5}},
+                ),
+                "post_trade_1",
+            )
+        quantities = {record.exporter_id: record.raw_quantity_tonnes for record in records}
+        self.assertEqual(quantities, {200: 2.5, 300: 4.0})
+
+    def test_empty_quantity_values_contribute_zero_without_stopping_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            reporter = root / "UNComtrade_2018_Import_ByPartner" / "reporter_100"
+            reporter.mkdir(parents=True)
+            path = reporter / "100_260400_M_2018_partners.csv"
+            path.write_text(
+                "partnerCode,qtyUnitAbbr,qty,netWeight\n"
+                "200,N/A,,\n",
+                encoding="utf-8",
+            )
+            records = load_trade_records(
+                settings(
+                    year=2018,
+                    trade_root=root,
+                    post_trade_hs={"post_trade_1": {"260400": 0.5}},
+                ),
+                "post_trade_1",
+            )
+        self.assertEqual(records, [])
+
 
 class ScalingTests(unittest.TestCase):
     def test_chemistry_weighted_factor_matches_production_shares(self) -> None:
