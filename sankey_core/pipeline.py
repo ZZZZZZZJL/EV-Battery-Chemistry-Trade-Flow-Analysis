@@ -481,7 +481,7 @@ def run_pipeline(settings: Settings) -> dict[str, str]:
             detail = " ".join(message.split())
             raise RuntimeError(
                 "PNG export requires Kaleido and a Chrome-compatible browser. On Render, set the "
-                "Build Command to `pip install -r requirements.txt && plotly_get_chrome -y`, then "
+                "Build Command to `python scripts/render_build.py`, then "
                 "run Manual Deploy > Clear build cache & deploy. "
                 f"Underlying export error: {detail}"
             ) from exc
