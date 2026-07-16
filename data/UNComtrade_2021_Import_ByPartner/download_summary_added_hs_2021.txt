@@ -1,0 +1,11 @@
+finished_at=2026-07-15T20:54:52
+year=2021
+reporters=255
+hs_codes=260200,282010,282090,811100
+expected_combinations=1020
+terminal_combinations=1020
+file_counts={'260200': 96, '282010': 115, '282090': 117, '811100': 96}
+status_counts={'no_data': 596, 'existing_file': 272, 'downloaded': 152}
+errors=0
+missing=0
+invalid_files=0
