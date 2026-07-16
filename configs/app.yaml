@@ -1,5 +1,0 @@
-app:
-  name: EV-Battery-Chemistry-Trade-Flow-Analysis
-  entrypoint: apps.web.app:app
-  runtime_root_env: RUNTIME_ROOT
-  app_env_env: APP_ENV

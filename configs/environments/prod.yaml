@@ -1,4 +1,0 @@
-environment:
-  name: prod
-  strict_startup: true
-  runtime_root: /var/data/runtime

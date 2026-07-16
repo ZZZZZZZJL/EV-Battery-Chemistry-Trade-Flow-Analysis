@@ -1,4 +1,0 @@
-environment:
-  name: dev
-  strict_startup: false
-  runtime_root: instance/runtime

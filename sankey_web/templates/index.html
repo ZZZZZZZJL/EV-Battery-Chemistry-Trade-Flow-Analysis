@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Material Flow Studio</title>
+    <meta name="description" content="Configure and generate EV battery critical-mineral Sankey diagrams." />
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}" />
+  </head>
+  <body>
+    <header class="app-header">
+      <a class="brand" href="#workspace" aria-label="Material Flow Studio home">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span><strong>Material Flow Studio</strong><small>EV battery supply-chain Sankey builder</small></span>
+      </a>
+      <div class="header-actions">
+        <button id="toggle-setup" class="setup-toggle" type="button" aria-controls="setup-rail" aria-expanded="true">Hide setup</button>
+        <div class="header-status">
+          <span id="data-status-dot" class="status-dot"></span>
+          <span id="data-status">Checking local data</span>
+        </div>
+      </div>
+    </header>
+
+    <main id="workspace" class="workspace-shell">
+      <aside id="setup-rail" class="control-rail" aria-label="Sankey configuration">
+        <div class="rail-intro">
+          <p class="eyebrow">Scenario setup</p>
+          <h1>Build one traceable material-flow view.</h1>
+          <p>Configure the chain, production evidence, and bilateral trade conversions before generating.</p>
+        </div>
+
+        <form id="scenario-form">
+          <section class="control-section" aria-labelledby="scenario-heading">
+            <button class="section-trigger" type="button" aria-expanded="true" aria-controls="scenario-section">
+              <span class="step-number">01</span>
+              <span><strong id="scenario-heading">Scenario</strong><small>Metal and reporting year</small></span>
+              <span class="chevron" aria-hidden="true"></span>
+            </button>
+            <div id="scenario-section" class="section-body">
+              <fieldset>
+                <legend>Metal</legend>
+                <div id="metal-options" class="segmented" aria-label="Metal"></div>
+              </fieldset>
+              <label class="field-label" for="year-select">Trade year</label>
+              <select id="year-select" class="field-input"></select>
+            </div>
+          </section>
+
+          <section class="control-section" aria-labelledby="chain-heading">
+            <button class="section-trigger" type="button" aria-expanded="true" aria-controls="chain-section">
+              <span class="step-number">02</span>
+              <span><strong id="chain-heading">Production chain</strong><small>Show or fold stages</small></span>
+              <span class="chevron" aria-hidden="true"></span>
+            </button>
+            <div id="chain-section" class="section-body">
+              <div class="switch-list">
+                <label class="switch-row">
+                  <span><strong>Merge processing + refining</strong><small>Use one Intermediate stage</small></span>
+                  <input id="merge-processing" type="checkbox" role="switch" />
+                  <i aria-hidden="true"></i>
+                </label>
+                <label class="switch-row">
+                  <span><strong>Show PCAM</strong><small>Keep the precursor stage</small></span>
+                  <input id="show-pcam" type="checkbox" role="switch" checked />
+                  <i aria-hidden="true"></i>
+                </label>
+                <label class="switch-row">
+                  <span><strong>Show battery</strong><small>Continue beyond cathode</small></span>
+                  <input id="show-battery" type="checkbox" role="switch" checked />
+                  <i aria-hidden="true"></i>
+                </label>
+              </div>
+              <div id="chain-preview" class="chain-preview" aria-label="Active production chain"></div>
+            </div>
+          </section>
+
+          <section class="control-section" aria-labelledby="production-heading">
+            <button class="section-trigger" type="button" aria-expanded="true" aria-controls="production-section">
+              <span class="step-number">03</span>
+              <span><strong id="production-heading">Production evidence</strong><small>Mode, source, and status</small></span>
+              <span class="chevron" aria-hidden="true"></span>
+            </button>
+            <div id="production-section" class="section-body">
+              <label class="switch-row emphasized">
+                <span><strong>Use production quantities</strong><small>Off uses trade-balance node sizing while retaining production membership and chemistry shares</small></span>
+                <input id="use-production" type="checkbox" role="switch" checked />
+                <i aria-hidden="true"></i>
+              </label>
+
+              <div class="subsection-head">
+                <span>Source by stage</span>
+                <button id="open-source-drawer" class="text-button" type="button">Manage sources</button>
+              </div>
+              <div id="stage-source-list" class="stage-source-list"></div>
+
+              <fieldset id="status-fieldset" class="status-fieldset">
+                <legend>SCInsight / Benchmark status</legend>
+                <label class="check-row"><input id="status-all" type="checkbox" checked /><span>All available statuses</span></label>
+                <div id="status-options" class="check-grid">
+                  <label class="check-row"><input type="checkbox" value="operating" disabled /><span>Operating</span></label>
+                  <label class="check-row"><input type="checkbox" value="highly probable" disabled /><span>Highly probable</span></label>
+                  <label class="check-row"><input type="checkbox" value="probable" disabled /><span>Probable</span></label>
+                  <label class="check-row"><input type="checkbox" value="possible" disabled /><span>Possible</span></label>
+                </div>
+                <p class="field-help">USGS and Ma et al., 2026 always use status=all.</p>
+              </fieldset>
+            </div>
+          </section>
+
+          <section class="control-section" aria-labelledby="trade-heading">
+            <button class="section-trigger" type="button" aria-expanded="true" aria-controls="trade-section">
+              <span class="step-number">04</span>
+              <span><strong id="trade-heading">Post-trade conversion</strong><small>HS codes and contained-mineral factors</small></span>
+              <span class="chevron" aria-hidden="true"></span>
+            </button>
+            <div id="trade-section" class="section-body">
+              <div class="trade-toolbar">
+                <p>One factor is applied to every eligible bilateral flow for the same HS code. Non-producer → non-producer trade is excluded.</p>
+                <button id="apply-preset" class="secondary-button" type="button">Apply metal preset</button>
+              </div>
+              <div id="trade-step-list" class="trade-step-list"></div>
+            </div>
+          </section>
+
+          <section class="control-section" aria-labelledby="display-heading">
+            <button class="section-trigger" type="button" aria-expanded="false" aria-controls="display-section">
+              <span class="step-number">05</span>
+              <span><strong id="display-heading">Diagram options</strong><small>Reference and chemistry display</small></span>
+              <span class="chevron" aria-hidden="true"></span>
+            </button>
+            <div id="display-section" class="section-body" hidden>
+              <div class="field-pair">
+                <label><span>Reference quantity (t)</span><input id="reference-quantity" class="field-input" type="number" min="1" step="any" value="700000" /></label>
+                <label><span>Label font size</span><input id="label-font-size" class="field-input" type="number" min="8" max="32" step="1" value="16" /></label>
+              </div>
+              <label class="field-label" for="country-label-mode">Country labels</label>
+              <select id="country-label-mode" class="field-input">
+                <option value="full">Full country name</option>
+                <option value="iso3">ISO3 abbreviation</option>
+              </select>
+              <div class="field-pair">
+                <label><span>Hide flows below (t)</span><input id="flow-transparency-threshold" class="field-input" type="number" min="0" step="any" value="0" /></label>
+                <label><span>Hide nodes below (t)</span><input id="node-transparency-threshold" class="field-input" type="number" min="0" step="any" value="0" /></label>
+              </div>
+              <p class="field-help">Filtering makes items transparent without changing their quantities or material balances. Gray special nodes remain visible.</p>
+              <div class="country-preserve-field">
+                <label class="field-label" for="preserve-country-input">Always keep countries</label>
+                <div class="country-add-row">
+                  <input id="preserve-country-input" class="field-input" type="text" list="country-options" placeholder="Type a country or ISO3" autocomplete="off" />
+                  <button id="add-preserved-country" class="secondary-button" type="button">Keep</button>
+                </div>
+                <datalist id="country-options"></datalist>
+                <div id="preserved-country-list" class="preserved-country-list" aria-live="polite"></div>
+              </div>
+              <label class="field-label" for="node-view">Cathode / battery nodes</label>
+              <select id="node-view" class="field-input">
+                <option value="country">Country</option>
+                <option value="chemistry_only">Chemistry</option>
+                <option value="country_chemistry">Country + chemistry</option>
+              </select>
+              <div id="chemistry-options" class="conditional-options" hidden>
+                <label class="field-label" for="chemistry-scope">Chemistry split scope</label>
+                <select id="chemistry-scope" class="field-input">
+                  <option value="both">Cathode and battery</option>
+                  <option value="battery_only">Battery only; cathode by country</option>
+                </select>
+                <label class="check-row"><input id="merge-lmfp" type="checkbox" checked /><span>Merge LMFP into LFP</span></label>
+              </div>
+            </div>
+          </section>
+
+          <div class="generate-dock">
+            <div><span id="readiness-label">Reviewing inputs</span><small id="readiness-detail">Source coverage is loading.</small></div>
+            <div id="target-slot-control" class="target-slot-control" hidden>
+              <small>Generate into</small>
+              <div class="mini-segmented" aria-label="Comparison target">
+                <button type="button" data-target-slot="a" class="is-active">A</button>
+                <button type="button" data-target-slot="b">B</button>
+              </div>
+            </div>
+            <button id="generate-button" class="primary-button" type="submit">
+              <span>Generate Sankey</span><i aria-hidden="true">→</i>
+            </button>
+          </div>
+        </form>
+      </aside>
+
+      <section class="canvas-workspace" aria-label="Sankey output">
+        <div class="canvas-toolbar">
+          <div>
+            <p class="eyebrow">Live artifacts</p>
+            <h2 id="workspace-title">Configure and compare material flows</h2>
+          </div>
+          <div id="view-mode-options" class="segmented view-mode-options" aria-label="Result layout">
+            <button type="button" data-view-mode="single" class="is-active">Single</button>
+            <button type="button" data-view-mode="compare">Compare</button>
+          </div>
+        </div>
+
+        <div id="error-banner" class="error-banner" hidden>
+          <div><strong>Action stopped</strong><p id="error-message"></p></div>
+          <button id="dismiss-error" type="button" aria-label="Dismiss error">×</button>
+        </div>
+
+        <div id="figure-grid" class="figure-grid">
+          {% for slot in ['a', 'b'] %}
+          <article class="figure-panel" data-figure-panel="{{ slot }}" {% if slot == 'b' %}hidden{% endif %}>
+            <header class="figure-panel-head">
+              <div><span class="slot-badge">Scenario {{ slot|upper }}</span><h3 id="figure-title-{{ slot }}">No scenario generated</h3></div>
+              <div class="toolbar-actions">
+                <span id="run-status-{{ slot }}" class="run-status is-idle"><i></i>Not generated</span>
+                <a id="open-figure-{{ slot }}" class="icon-button is-disabled" href="#" target="_blank" rel="noreferrer" aria-label="Open scenario {{ slot|upper }} in a new tab" title="Open in new tab">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M19 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h6" /></svg>
+                </a>
+              </div>
+            </header>
+            <div id="canvas-frame-{{ slot }}" class="canvas-frame">
+              <div id="empty-state-{{ slot }}" class="empty-state">
+                <div class="flow-watermark" aria-hidden="true"><span></span><i></i><span></span><i></i><span></span><i></i><span></span></div>
+                <div class="empty-copy">
+                  <span class="empty-kicker">Dynamic Plotly canvas</span>
+                  <h3>{% if slot == 'a' %}Generate your first traceable scenario.{% else %}Generate a second scenario for comparison.{% endif %}</h3>
+                  <p>Each result keeps its calculated height and its own downloads. A failed run will not replace the last successful artifact.</p>
+                </div>
+              </div>
+              <div id="loading-state-{{ slot }}" class="loading-state" hidden>
+                <div class="loading-line"><i></i></div>
+                <strong>Building material balances</strong>
+                <span>Reading production, aggregating import records, and rendering the artifact.</span>
+              </div>
+              <iframe id="figure-frame-{{ slot }}" title="Generated Sankey diagram {{ slot|upper }}" hidden></iframe>
+            </div>
+            <div id="result-strip-{{ slot }}" class="result-strip" hidden>
+              <div class="result-summary">
+                <span>Latest successful run</span>
+                <strong id="result-summary-title-{{ slot }}"></strong>
+                <small id="result-summary-detail-{{ slot }}"></small>
+              </div>
+              <nav id="download-links-{{ slot }}" class="download-links" aria-label="Scenario {{ slot|upper }} artifact downloads"></nav>
+            </div>
+          </article>
+          {% endfor %}
+        </div>
+      </section>
+    </main>
+
+    <div id="source-backdrop" class="drawer-backdrop" hidden></div>
+    <aside id="source-drawer" class="source-drawer" aria-labelledby="source-drawer-title" aria-hidden="true">
+      <div class="drawer-head">
+        <div><p class="eyebrow">Production library</p><h2 id="source-drawer-title">Source coverage</h2></div>
+        <button id="close-source-drawer" class="icon-button" type="button" aria-label="Close source manager">×</button>
+      </div>
+      <p class="drawer-intro">USGS and Ma et al., 2026 are available locally. SCInsight and Benchmark exist only for this browser tab and must be uploaded again in a new tab.</p>
+      <div id="source-catalog" class="source-catalog"></div>
+    </aside>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="{{ url_for('static', filename='js/app.js') }}" defer></script>
+  </body>
+</html>

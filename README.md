@@ -1,210 +1,140 @@
-# EV Battery Chemistry Trade-Flow Analysis
+# Material Flow Studio
 
-A public research web application for exploring electric-vehicle battery critical-mineral supply-chain trade flows, conversion-factor optimization results, and vulnerability-index views across selected battery chemistry and mineral cases.
+A local, public Flask workspace for configuring and generating EV battery
+critical-mineral Sankey diagrams. It wraps the established
+`manual_sankey_new` calculation and Plotly rendering pipeline instead of
+reimplementing material-balance logic in the browser.
 
-## Live Website
+## What the website supports
 
-The deployed website is available here:
+- Li, Co, Ni, and Mn; trade years are discovered from local
+  `UNComtrade_<year>_Import_ByPartner` folders.
+- Complete chain: Mining → Processing → Refining → PCAM → Cathode → Battery.
+- Optional Processing/Refining merge, PCAM removal, and Battery removal.
+- Production-weighted or trade-balance node sizing.
+- A separate production source for every active production stage.
+- Multiple production statuses summed without probability weighting.
+- Any number of HS code / conversion-factor rows for every post-trade step.
+- Country, chemistry, or country + chemistry terminal nodes.
+- Full country-name or ISO3 labels (hover and audit data retain full names).
+- Single-result and A/B comparison modes with independent artifacts.
+- A collapsible Setup rail for full-width comparison viewing.
+- Flow and node transparency thresholds that do not change material balances,
+  plus an always-keep country list and protection for gray special nodes.
+- Dynamic Sankey height from the canonical renderer; the website does not
+  force a fixed iframe height.
+- PNG, self-contained HTML, manifest, conversion-factor, balance, stage-flow,
+  and production-source audit downloads.
 
-[https://ev-battery-chemistry-trade-flow-analysis.onrender.com/](https://ev-battery-chemistry-trade-flow-analysis.onrender.com/)
+There is no private area, password, or analyst mode.
 
-## Overview
+## Production data lifecycle
 
-This repository hosts the public web application and supporting code for visualizing and analyzing EV battery critical-mineral supply-chain flows. The application is designed to help users explore how battery minerals move through multi-stage supply chains, from upstream production and trade flows to downstream cathode-related production views.
+The repository bundles and always exposes these public workbooks:
 
-The website currently supports interactive Sankey diagrams, selected conversion-factor optimization outputs, coefficient-level inspection, and vulnerability-index dashboards. It is intended as a research visualization and analysis interface, not as a real-time market-monitoring, investment, or policy dashboard.
+- `USGS_production_data.xlsx`
+- `ma_2026_production_data.xlsx`
 
-## Research Background
+SCInsight and Benchmark must be uploaded from the Production Library. Uploads
+are assigned to a random ID stored in browser `sessionStorage`. A new browser
+tab gets a new ID and cannot see uploads from another tab, so the workbook must
+be uploaded again. Uploaded files are not copied into either source data
+directory.
 
-This project is associated with the Carnegie Mellon University Vehicle Electrification Group:
+## Bundled public data
 
-[https://www.cmu.edu/cit/veg/](https://www.cmu.edu/cit/veg/)
+The repository is self-contained for its public data path:
 
-It builds on the research context of the Nature Communications article:
+- Import-by-partner trade folders for every year from 2018 through 2024.
+- `data/production/USGS_production_data.xlsx`.
+- `data/production/ma_2026_production_data.xlsx`.
+- `data/reference/ListOfreference.xlsx` for country names, regions, and colors.
 
-**“Electric vehicle battery chemistry affects supply chain disruption vulnerabilities”**  
-[https://www.nature.com/articles/s41467-024-46418-1](https://www.nature.com/articles/s41467-024-46418-1)
+The default application settings read these files directly from `data/`; no
+machine-specific `E:` drive path is required.
 
-It also follows from the earlier public repository associated with that article:
+Every workbook is validated before it becomes selectable. The validator checks
+the `<metal>_<stage>` sheet convention, required `id`, `reporterDesc`, and
+`status` columns, available years, and status values. `Product` is required for
+Cathode and Battery sheets, where chemistry allocation needs it; non-terminal
+production sheets do not require that column. The UI then disables
+stage/source combinations that do not cover the selected metal, stage, and
+year.
 
-[acheng98/ev-battery-chemistry-supply-chain-vulnerabilities](https://github.com/acheng98/ev-battery-chemistry-supply-chain-vulnerabilities)
+## Comparison behavior
 
-The current repository extends this line of work as a public-facing web and analysis interface for exploring EV battery chemistry trade-flow cases, optimization outputs, and vulnerability-index views.
+Choose **Compare** above the result area, then select **A** or **B** beside the
+Generate button. Only the selected slot is regenerated. The other slot and the
+last successful result in the selected slot remain available if generation
+fails, so route, source, label, or factor changes can be compared safely.
+After a slot has generated successfully, selecting A or B restores the complete
+setup used for that slot, including sources, HS factors, statuses, display
+options, thresholds, and preserved countries. **Hide setup** expands the result
+workspace without discarding either scenario.
 
-## Main Features
+Visibility thresholds operate after material-flow calculation. A flow or
+regular node below its threshold becomes transparent but remains in the Plotly
+layout and all audit outputs. Flows and nodes involving an always-kept country
+remain visible, and gray unknown/non-producer special nodes are never hidden by
+the node threshold.
 
-### Sankey Diagram Exploration
+Metal presets are matched to the active source/target stage pair rather than a
+fixed step number. Newly exposed pairs receive their metal default; manually
+edited pairs are preserved while folding and reopening the chain until the
+user explicitly reapplies the preset or changes metal.
 
-The application provides interactive Sankey diagrams for EV battery critical-mineral supply-chain flows. Users can explore supply-chain stages, countries, trade links, and selected mineral-year-result combinations. The diagrams are designed to show how material flows propagate through the modeled supply chain.
+## Run locally
 
-### Conversion Factor Optimization Analysis
-
-The website includes analysis views for selected conversion-factor optimization results. These views compare original and optimized flow snapshots and summarize changes in flow balance, unknown or special-node behavior, and stage-level outputs.
-
-### Coefficient Explorer
-
-The Coefficient Explorer allows users to inspect selected conversion coefficients used in the optimization workflow. Where available, it shows recommended values, bounds, exposure, and related flow changes.
-
-### Vulnerability Index Dashboard
-
-The Vulnerability Index dashboard presents country-level vulnerability-index results and method-case comparisons. These views are intended to support exploratory analysis of how country involvement in production or trade may affect downstream battery-material supply-chain exposure.
-
-### Country VI and Sensitivity-Style Analysis
-
-The application includes country-level VI views and a sensitivity-style analysis interface. These views are useful for comparing country exposure, baseline deltas, and selected scenario-style changes. Some advanced analysis functions may depend on runtime data availability and access mode.
-
-## Repository Structure
-
-The repository is organized around a Python web/runtime architecture:
-
-```text
-.
-├── apps/
-│   └── web/                         # Public ASGI web entrypoint
-├── src/
-│   └── trade_flow/
-│       ├── web/                     # Web application, routes, templates, static assets
-│       ├── domain/                  # Runtime contracts, manifest models, validation helpers
-│       ├── runtime/                 # Runtime bundle loading and dataset access
-│       ├── baseline/                # Baseline analysis logic
-│       ├── conversion_factor_optimization/
-│       │   └── ...                  # First-generation conversion-factor optimization engine
-│       ├── optimization/            # Shared optimization-facing interfaces and helpers
-│       ├── metals/                  # Metal-specific adapters and extension points
-│       ├── pipelines/               # Higher-level pipeline facades
-│       ├── publishing/              # Runtime bundle publishing and validation helpers
-│       └── legacy_site/             # Compatibility namespace for earlier site logic
-├── configs/                         # Configuration files and runtime contracts
-├── schemas/                         # Data/schema contracts
-├── docs/                            # Architecture notes and runbooks
-├── scripts/                         # Validation, smoke-test, and maintenance scripts
-├── tests/                           # Unit and integration-style tests
-├── fixtures/                        # Minimal public examples or test fixtures
-├── pyproject.toml                   # Python package metadata and dependencies
-├── requirements.txt                 # Runtime dependency list
-├── render.yaml                      # Render deployment configuration
-└── README.md
-```
-
-The exact contents may evolve as the public web application, runtime bundle format, and optimization workflow are updated.
-
-## Data and Runtime Note
-
-Some generated runtime data used by the deployed website may be managed separately from the public source-code repository. This separation is intentional: the public repository contains the web application, analysis code, configuration contracts, documentation, and selected public fixtures, while deployed runtime data may be built, versioned, or mounted separately.
-
-Do not assume that all private, generated, intermediate, or deployment-specific datasets are included in this repository. Running the full website locally may require access to a compatible runtime data bundle and the correct environment-variable configuration.
-
-Important runtime-related environment variables may include:
-
-```text
-APP_ENV
-RUNTIME_ROOT
-BATTERY_SITE_APP_DATA_DIR
-BATTERY_SITE_OUTPUT_VERSIONS_DIR
-BATTERY_SITE_DATA_ROOT
-BATTERY_SITE_REFERENCE_FILE
-BATTERY_SITE_ORIGINAL_DATA_ROOT
-BATTERY_SITE_FIRST_OPTIMIZATION_DATA_ROOT
-BATTERY_SITE_INSTANCE_DIR
-BATTERY_SITE_DATASET_CONFIG
-BATTERY_SITE_ANALYST_PASSWORD
-BATTERY_SITE_STRICT_STARTUP
-```
-
-## Local Development
-
-A typical local setup, if the required runtime data is available, is:
-
-```bash
-git clone https://github.com/ZZZZZZZJL/EV-Battery-Chemistry-Trade-Flow-Analysis.git
-cd EV-Battery-Chemistry-Trade-Flow-Analysis
-
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .
-```
-
-On Windows PowerShell, the virtual environment activation command is typically:
+From this folder:
 
 ```powershell
-.venv\Scripts\Activate.ps1
+D:\Python\anaconda3\python.exe -m pip install -r requirements.txt
+D:\Python\anaconda3\python.exe app.py
 ```
 
-Before running the application, configure the runtime data paths. For example:
+Open <http://127.0.0.1:5050>.
 
-```bash
-export APP_ENV=dev
-export RUNTIME_ROOT=/path/to/runtime
-export BATTERY_SITE_APP_DATA_DIR=/path/to/runtime/current/app_data
-export BATTERY_SITE_OUTPUT_VERSIONS_DIR=/path/to/runtime/current/output_versions
-export BATTERY_SITE_DATA_ROOT=/path/to/shared/reference/data
-export BATTERY_SITE_INSTANCE_DIR=instance
+The repository-relative defaults can be overridden with environment variables:
+
+- `SANKEY_DATA_ROOT`
+- `MANUAL_SANKEY_CORE_ROOT`
+- `SANKEY_TRADE_ROOT`
+- `SANKEY_REFERENCE_FILE`
+
+## Architecture
+
+```text
+app.py                         Flask entrypoint
+sankey_core/                   Canonical material-flow and Plotly renderer
+sankey_web/
+  settings.py                 Local path and source registry
+  inventory.py                Workbook/schema/coverage inspection
+  generation.py               Web request → manual_sankey_new adapter
+  web.py                      Public API, uploads, artifacts
+  templates/index.html        Operational workspace
+  static/css/app.css          Restrained responsive design system
+  static/js/app.js            Client state and interactions
+tests/test_web.py             Inventory, route, session, upload tests
+data/
+  UNComtrade_2018_Import_ByPartner/
+  ...
+  UNComtrade_2024_Import_ByPartner/
+  production/                 Bundled USGS and Ma et al., 2026 workbooks
+  reference/                  Country-name, region, and color workbook
+.runtime/
+  uploads/<session-hash>/     Ephemeral uploaded workbooks
+  artifacts/<session-hash>/   Generated PNG/HTML/audit bundles
 ```
 
-On Windows PowerShell:
+The browser never reads production or trade files directly. The backend passes
+a validated scenario into the bundled `sankey_core` pipeline
+and `run_pipeline()`. This keeps importer/exporter handling, producer-only
+production constraints, chemistry allocation, balances, reference sizing, and
+dynamic height identical to the current local exporter.
+
+## Tests
 
 ```powershell
-$env:APP_ENV = "dev"
-$env:RUNTIME_ROOT = "C:\path\to\runtime"
-$env:BATTERY_SITE_APP_DATA_DIR = "C:\path\to\runtime\current\app_data"
-$env:BATTERY_SITE_OUTPUT_VERSIONS_DIR = "C:\path\to\runtime\current\output_versions"
-$env:BATTERY_SITE_DATA_ROOT = "C:\path\to\shared\reference\data"
-$env:BATTERY_SITE_INSTANCE_DIR = "instance"
+D:\Python\anaconda3\python.exe -m unittest discover -s tests -v
+node --check sankey_web\static\js\app.js
 ```
-
-Then start the FastAPI application with Uvicorn:
-
-```bash
-uvicorn --app-dir . apps.web.app:app --host 127.0.0.1 --port 8147
-```
-
-Open the local site at:
-
-[http://127.0.0.1:8147/](http://127.0.0.1:8147/)
-
-A deployment-style command is also defined in `render.yaml`:
-
-```bash
-uvicorn --app-dir . apps.web.app:app --host 0.0.0.0 --port $PORT
-```
-
-If runtime data is unavailable or incomplete, some pages, tables, or analysis views may not load. The `/healthz` endpoint can be used to inspect runtime readiness.
-
-## Verification
-
-Typical local checks may include:
-
-```bash
-python -B scripts/validate_repo.py
-python -B -m unittest discover -s tests
-```
-
-If the runtime data bundle is available, a smoke test may also be run:
-
-```bash
-python -B scripts/smoke_test_app.py
-```
-
-## Citation and Acknowledgments
-
-This repository is part of a research software workflow associated with the CMU Vehicle Electrification Group.
-
-Please cite or acknowledge the following research context when using this project in academic or public-facing work:
-
-Cheng, A. L., Fuchs, E. R. H., Karplus, V. J., & Michalek, J. J. (2024). **Electric vehicle battery chemistry affects supply chain disruption vulnerabilities.** *Nature Communications*, 15, 2143.  
-[https://www.nature.com/articles/s41467-024-46418-1](https://www.nature.com/articles/s41467-024-46418-1)
-
-Earlier public code and data repository:
-
-[acheng98/ev-battery-chemistry-supply-chain-vulnerabilities](https://github.com/acheng98/ev-battery-chemistry-supply-chain-vulnerabilities)
-
-Research group:
-
-[CMU Vehicle Electrification Group](https://www.cmu.edu/cit/veg/)
-
-## License and Reuse
-
-The license for this repository should be confirmed by the maintainers. If a formal license file is added, users should follow the terms stated in that file.
-
-Until then, please contact the repository maintainer before reusing, redistributing, or extending the code or generated outputs beyond standard academic reference and review.
-
